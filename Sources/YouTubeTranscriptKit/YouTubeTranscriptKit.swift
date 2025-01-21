@@ -299,6 +299,9 @@ public enum YouTubeTranscriptKit {
               let actionMatch = actionRegex.firstMatch(in: block, range: NSRange(block.startIndex..<block.endIndex, in: block)),
               actionMatch.numberOfRanges > 1,
               let actionRange = Range(actionMatch.range(at: 1), in: block) else {
+            guard !block.contains("Viewed a post that is no longer available") else {
+                return nil
+            }
             throw TranscriptError.activityParseError(block: block, reason: "Could not extract action")
         }
 
