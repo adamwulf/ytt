@@ -397,7 +397,7 @@ public enum YouTubeTranscriptKit {
     }
 
     private static func extractPostId(from block: String) throws -> (id: String, text: String)? {
-        let pattern = #"<a href="(?:https://)?www\.youtube\.com/post/([^"]+)">([^<]+)</a>"#
+        let pattern = #"<a href="(?:https://)?(?:www\.)?youtube\.com/post/([^"]+)">([^<]+)</a>"#
         guard let regex = try? NSRegularExpression(pattern: pattern),
               let match = regex.firstMatch(in: block, range: NSRange(block.startIndex..<block.endIndex, in: block)),
               match.numberOfRanges > 2,
@@ -409,7 +409,7 @@ public enum YouTubeTranscriptKit {
     }
 
     private static func extractChannelId(from block: String) throws -> (id: String, name: String)? {
-        let pattern = #"<a href="(?:https://)?www\.youtube\.com/channel/([^"]+)">([^<]+)</a>"#
+        let pattern = #"<a href="(?:https://)?(?:www\.)?youtube\.com/channel/([^"]+)">([^<]+)</a>"#
         guard let regex = try? NSRegularExpression(pattern: pattern),
               let match = regex.firstMatch(in: block, range: NSRange(block.startIndex..<block.endIndex, in: block)),
               match.numberOfRanges > 2,
@@ -421,7 +421,7 @@ public enum YouTubeTranscriptKit {
     }
 
     private static func extractPlaylistId(from block: String) throws -> (id: String, title: String)? {
-        let pattern = #"<a href="(?:https://)?www\.youtube\.com/playlist\?list=([^"]+)">([^<]+)</a>"#
+        let pattern = #"<a href="(?:https://)?(?:www\.)?youtube\.com/playlist\?list=([^"]+)">([^<]+)</a>"#
         guard let regex = try? NSRegularExpression(pattern: pattern),
               let match = regex.firstMatch(in: block, range: NSRange(block.startIndex..<block.endIndex, in: block)),
               match.numberOfRanges > 2,
@@ -433,7 +433,7 @@ public enum YouTubeTranscriptKit {
     }
 
     private static func extractSearchQuery(from block: String) throws -> String? {
-        let pattern = #"<a href="(?:https://)?www\.youtube\.com/results\?search_query=([^"]+)">([^<]+)</a>"#
+        let pattern = #"<a href="(?:https://)?(?:www\.)?youtube\.com/results\?search_query=([^"]+)">([^<]+)</a>"#
         guard let regex = try? NSRegularExpression(pattern: pattern),
               let match = regex.firstMatch(in: block, range: NSRange(block.startIndex..<block.endIndex, in: block)),
               match.numberOfRanges > 1,
