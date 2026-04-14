@@ -21,6 +21,7 @@ public struct Activity: Codable {
         case searchedFor = "searched for"
         case dismissed = "dismissed"
         case usedShortsCreationTools = "used shorts creation tools"
+        case shared = "shared"
     }
 
     public enum Link: Codable {

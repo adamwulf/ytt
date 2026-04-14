@@ -89,12 +89,49 @@ final class YouTubeTranscriptKitTests: XCTestCase {
         XCTAssertEqual(activities.count, 0)
     }
 
+    func testParseSharedVideoActivity() async throws {
+        // Use Unicode scalar to build HTML entities without literal semicolons in source
+        let sc = String(UnicodeScalar(59))
+        let amp = "&amp\(sc)"
+        let emsp = "&emsp\(sc)"
+        let videoURL = "https://youtube.com/watch?v=91AJ0cpgLlQ\(amp)si=YuAnMOTLcrxcDecZ"
+        let html = "<html><body>"
+            + "<div class=\"outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp\">"
+            + "<div class=\"mdl-grid\">"
+            + "<div class=\"header-cell mdl-cell mdl-cell--12-col\">"
+            + "<p class=\"mdl-typography--title\">YouTube<br></p></div>"
+            + "<div class=\"content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1\">"
+            + "<a href=\"\(videoURL)\">Shared video</a><br>"
+            + "Shared URL: \(videoURL)<br>"
+            + "<a href=\"\(videoURL)\">How Anthropic uses Claude</a><br>"
+            + "Mar 26, 2026, 11:57:04 PM CDT<br></div>"
+            + "<div class=\"content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1 mdl-typography--text-right\"></div>"
+            + "<div class=\"content-cell mdl-cell mdl-cell--12-col mdl-typography--caption\">"
+            + "<b>Products:</b><br>\(emsp)YouTube<br></div></div></div>"
+            + "</body></html>"
+
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("test_activity_shared.html")
+        try html.write(to: tempURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        let activities = try await YouTubeTranscriptKit.getActivity(fileURL: tempURL)
+        XCTAssertEqual(activities.count, 1)
+        XCTAssertEqual(activities[0].action, .shared)
+        if case .video(let id, let title) = activities[0].link {
+            XCTAssertTrue(id.hasPrefix("91AJ0cpgLlQ"))
+            XCTAssertEqual(title, "How Anthropic uses Claude")
+        } else {
+            XCTFail("Expected .video link, got \(activities[0].link)")
+        }
+    }
+
     // MARK: - Action Enum
 
     func testActionRawValues() {
         XCTAssertEqual(Activity.Action.usedShortsCreationTools.rawValue, "used shorts creation tools")
         XCTAssertEqual(Activity.Action.watched.rawValue, "watched")
         XCTAssertEqual(Activity.Action.dismissed.rawValue, "dismissed")
+        XCTAssertEqual(Activity.Action.shared.rawValue, "shared")
     }
 
     // MARK: - Link URL
