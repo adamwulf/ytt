@@ -19,6 +19,7 @@ public struct Activity: Codable {
         case votedOn = "voted on"
         case saved = "saved"
         case searchedFor = "searched for"
+        case dismissed = "dismissed"
     }
 
     public enum Link: Codable {
