@@ -294,7 +294,8 @@ public enum YouTubeTranscriptKit {
 
     private static func parseActivityBlock(_ block: String) throws -> Activity? {
         // Skip activities for unavailable content
-        guard !block.contains("Viewed a post that is no longer available") else {
+        guard !block.contains("Viewed a post that is no longer available"),
+              !block.contains("Dismissed a video that is no longer available") else {
             return nil
         }
 

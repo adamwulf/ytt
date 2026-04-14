@@ -89,6 +89,29 @@ final class YouTubeTranscriptKitTests: XCTestCase {
         XCTAssertEqual(activities.count, 0)
     }
 
+    func testParseDismissedUnavailableVideoReturnsNil() async throws {
+        let html = """
+        <html><body>
+        <div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp">
+        <div class="mdl-grid">
+        <div class="header-cell mdl-cell mdl-cell--12-col">
+        <p class="mdl-typography--title">YouTube<br></p>
+        </div>
+        <div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Dismissed a video that is no longer available<br>Dec 27, 2025, 9:42:00 PM CDT<br></div>
+        <div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1 mdl-typography--text-right"></div>
+        </div>
+        </div>
+        </body></html>
+        """
+
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("test_activity_dismissed_unavailable.html")
+        try html.write(to: tempURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        let activities = try await YouTubeTranscriptKit.getActivity(fileURL: tempURL)
+        XCTAssertEqual(activities.count, 0)
+    }
+
     func testParseSharedVideoActivity() async throws {
         // Use Unicode scalar to build HTML entities without literal semicolons in source
         let sc = String(UnicodeScalar(59))
