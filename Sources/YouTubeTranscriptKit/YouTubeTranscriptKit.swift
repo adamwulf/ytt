@@ -301,8 +301,10 @@ public enum YouTubeTranscriptKit {
         // Extract action text from the content cell.
         // First try the pattern where action text is followed by a URL or anchor tag.
         // If that fails, try the pattern where action text is followed by <br> (no link).
+        // Finally, try the pattern where the action is inside the first anchor tag (e.g., "Shared video").
         let actionWithLinkPattern = #"<div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">([^<]+?)(?:(?:https://|<a href="))"#
         let actionNoLinkPattern = #"<div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">([^<]+?)<br>"#
+        let actionInLinkPattern = #"<div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1"><a href="[^"]+">(\w+) \w+</a>"#
 
         let actionText: String
 
@@ -312,6 +314,11 @@ public enum YouTubeTranscriptKit {
            let actionRange = Range(actionMatch.range(at: 1), in: block) {
             actionText = String(block[actionRange]).trimmingCharacters(in: .whitespaces).lowercased()
         } else if let actionRegex = try? NSRegularExpression(pattern: actionNoLinkPattern),
+                  let actionMatch = actionRegex.firstMatch(in: block, range: NSRange(block.startIndex..<block.endIndex, in: block)),
+                  actionMatch.numberOfRanges > 1,
+                  let actionRange = Range(actionMatch.range(at: 1), in: block) {
+            actionText = String(block[actionRange]).trimmingCharacters(in: .whitespaces).lowercased()
+        } else if let actionRegex = try? NSRegularExpression(pattern: actionInLinkPattern),
                   let actionMatch = actionRegex.firstMatch(in: block, range: NSRange(block.startIndex..<block.endIndex, in: block)),
                   actionMatch.numberOfRanges > 1,
                   let actionRange = Range(actionMatch.range(at: 1), in: block) {
@@ -356,25 +363,29 @@ public enum YouTubeTranscriptKit {
     }
 
     private static func extractVideoId(from block: String) throws -> (id: String, title: String?)? {
-        // Try anchor tag format first
-        let anchorPattern = #"<a href="(?:https://)?www\.youtube\.com/watch\?v=([^"]+)">([^<]+)</a>"#
-        if let regex = try? NSRegularExpression(pattern: anchorPattern),
-           let match = regex.firstMatch(in: block, range: NSRange(block.startIndex..<block.endIndex, in: block)),
-           match.numberOfRanges > 2,
-           let idRange = Range(match.range(at: 1), in: block),
-           let titleRange = Range(match.range(at: 2), in: block) {
-            let id = String(block[idRange])
-            let title = String(block[titleRange])
+        // Try anchor tag format first.
+        // Use the last match to prefer the actual video title over action descriptions
+        // (e.g., "Shared video" links repeat the URL but the last anchor has the real title).
+        let anchorPattern = #"<a href="(?:https://)?(?:www\.)?youtube\.com/watch\?v=([^"]+)">([^<]+)</a>"#
+        if let regex = try? NSRegularExpression(pattern: anchorPattern) {
+            let matches = regex.matches(in: block, range: NSRange(block.startIndex..<block.endIndex, in: block))
+            if let match = matches.last,
+               match.numberOfRanges > 2,
+               let idRange = Range(match.range(at: 1), in: block),
+               let titleRange = Range(match.range(at: 2), in: block) {
+                let id = String(block[idRange])
+                let title = String(block[titleRange])
 
-            // If title is just the URL, treat it as no title
-            if title == "https://www.youtube.com/watch?v=\(id)" {
-                return (id, nil)
+                // If title is just the URL, treat it as no title
+                if title.hasSuffix("watch?v=\(id)") {
+                    return (id, nil)
+                }
+                return (id, title.stringByDecodingHTMLEntities)
             }
-            return (id, title.stringByDecodingHTMLEntities)
         }
 
         // Try plain URL format
-        let plainPattern = #"https://www\.youtube\.com/watch\?v=([^<\s]+)"#
+        let plainPattern = #"https://(?:www\.)?youtube\.com/watch\?v=([^<\s]+)"#
         if let regex = try? NSRegularExpression(pattern: plainPattern),
            let match = regex.firstMatch(in: block, range: NSRange(block.startIndex..<block.endIndex, in: block)),
            match.numberOfRanges > 1,
