@@ -20,6 +20,7 @@ public struct Activity: Codable {
         case saved = "saved"
         case searchedFor = "searched for"
         case dismissed = "dismissed"
+        case dismissedShelf = "dismissed shelf"
         case usedShortsCreationTools = "used shorts creation tools"
         case shared = "shared"
     }

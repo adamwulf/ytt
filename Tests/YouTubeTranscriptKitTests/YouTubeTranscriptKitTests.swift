@@ -125,12 +125,43 @@ final class YouTubeTranscriptKitTests: XCTestCase {
         }
     }
 
+    func testParseDismissedShelfActivity() async throws {
+        let sc = String(UnicodeScalar(59))
+        let emsp = "&emsp\(sc)"
+        let html = "<html><body>"
+            + "<div class=\"outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp\">"
+            + "<div class=\"mdl-grid\">"
+            + "<div class=\"header-cell mdl-cell mdl-cell--12-col\">"
+            + "<p class=\"mdl-typography--title\">YouTube<br></p></div>"
+            + "<div class=\"content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1\">"
+            + "Dismissed shelf<br>Jan 4, 2026, 1:48:04 PM CDT<br></div>"
+            + "<div class=\"content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1 mdl-typography--text-right\"></div>"
+            + "<div class=\"content-cell mdl-cell mdl-cell--12-col mdl-typography--caption\">"
+            + "<b>Products:</b><br>\(emsp)YouTube<br></div></div></div>"
+            + "</body></html>"
+
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("test_activity_dismissed_shelf.html")
+        try html.write(to: tempURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        let activities = try await YouTubeTranscriptKit.getActivity(fileURL: tempURL)
+        XCTAssertEqual(activities.count, 1)
+        XCTAssertEqual(activities[0].action, .dismissedShelf)
+        if case .none = activities[0].link {
+            // expected
+        } else {
+            XCTFail("Expected .none link, got \(activities[0].link)")
+        }
+        XCTAssertNil(activities[0].link.url)
+    }
+
     // MARK: - Action Enum
 
     func testActionRawValues() {
         XCTAssertEqual(Activity.Action.usedShortsCreationTools.rawValue, "used shorts creation tools")
         XCTAssertEqual(Activity.Action.watched.rawValue, "watched")
         XCTAssertEqual(Activity.Action.dismissed.rawValue, "dismissed")
+        XCTAssertEqual(Activity.Action.dismissedShelf.rawValue, "dismissed shelf")
         XCTAssertEqual(Activity.Action.shared.rawValue, "shared")
     }
 
