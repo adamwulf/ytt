@@ -118,8 +118,12 @@ struct Activity: AsyncParsableCommand {
                 case .search(let query):
                     print("Type: Search")
                     print("Query: \(query)")
+                case .none:
+                    print("Type: None")
                 }
-                print("URL: \(activity.link.url)")
+                if let url = activity.link.url {
+                    print("URL: \(url)")
+                }
                 print("Time: \(activity.timestamp)")
             }
         } catch YouTubeTranscriptKit.TranscriptError.activityParseError(let block, let reason) {
