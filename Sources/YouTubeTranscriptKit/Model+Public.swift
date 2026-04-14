@@ -23,6 +23,7 @@ public struct Activity: Codable {
         case dismissedShelf = "dismissed shelf"
         case usedShortsCreationTools = "used shorts creation tools"
         case shared = "shared"
+        case hyped = "hyped"
     }
 
     public enum Link: Codable {
