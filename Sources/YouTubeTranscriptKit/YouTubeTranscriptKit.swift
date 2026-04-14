@@ -293,19 +293,33 @@ public enum YouTubeTranscriptKit {
     }
 
     private static func parseActivityBlock(_ block: String) throws -> Activity? {
-        // Extract action - now captures text up until a URL pattern
-        let actionPattern = #"<div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">([^<]+?)(?:(?:https://|<a href="))"#
-        guard let actionRegex = try? NSRegularExpression(pattern: actionPattern),
-              let actionMatch = actionRegex.firstMatch(in: block, range: NSRange(block.startIndex..<block.endIndex, in: block)),
-              actionMatch.numberOfRanges > 1,
-              let actionRange = Range(actionMatch.range(at: 1), in: block) else {
-            guard !block.contains("Viewed a post that is no longer available") else {
-                return nil
-            }
+        // Skip activities for unavailable content
+        guard !block.contains("Viewed a post that is no longer available") else {
+            return nil
+        }
+
+        // Extract action text from the content cell.
+        // First try the pattern where action text is followed by a URL or anchor tag.
+        // If that fails, try the pattern where action text is followed by <br> (no link).
+        let actionWithLinkPattern = #"<div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">([^<]+?)(?:(?:https://|<a href="))"#
+        let actionNoLinkPattern = #"<div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">([^<]+?)<br>"#
+
+        let actionText: String
+
+        if let actionRegex = try? NSRegularExpression(pattern: actionWithLinkPattern),
+           let actionMatch = actionRegex.firstMatch(in: block, range: NSRange(block.startIndex..<block.endIndex, in: block)),
+           actionMatch.numberOfRanges > 1,
+           let actionRange = Range(actionMatch.range(at: 1), in: block) {
+            actionText = String(block[actionRange]).trimmingCharacters(in: .whitespaces).lowercased()
+        } else if let actionRegex = try? NSRegularExpression(pattern: actionNoLinkPattern),
+                  let actionMatch = actionRegex.firstMatch(in: block, range: NSRange(block.startIndex..<block.endIndex, in: block)),
+                  actionMatch.numberOfRanges > 1,
+                  let actionRange = Range(actionMatch.range(at: 1), in: block) {
+            actionText = String(block[actionRange]).trimmingCharacters(in: .whitespaces).lowercased()
+        } else {
             throw TranscriptError.activityParseError(block: block, reason: "Could not extract action")
         }
 
-        let actionText = String(block[actionRange]).trimmingCharacters(in: .whitespaces).lowercased()
         guard let action = Activity.Action(rawValue: actionText) else {
             throw TranscriptError.activityParseError(block: block, reason: "Unsupported activity type: \(actionText)")
         }
@@ -325,7 +339,7 @@ public enum YouTubeTranscriptKit {
         } else if let query = try? extractSearchQuery(from: block) {
             link = .search(query: query)
         } else {
-            throw TranscriptError.activityParseError(block: block, reason: "Could not extract URL")
+            link = .none
         }
 
         // Extract timestamp
