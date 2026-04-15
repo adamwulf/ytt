@@ -43,7 +43,7 @@ public enum YouTubeTranscriptKit {
     public static func getVideoInfo(url: URL, includeTranscript: Bool = true) async throws -> VideoInfo {
         let data: Data
         do {
-            var request = URLRequest(url: url)
+            let request = URLRequest(url: url)
             (data, _) = try await session.data(for: request)
         } catch {
             throw TranscriptError.networkError(error)
@@ -67,7 +67,7 @@ public enum YouTubeTranscriptKit {
     public static func getTranscript(url: URL) async throws -> [TranscriptMoment] {
         let data: Data
         do {
-            var request = URLRequest(url: url)
+            let request = URLRequest(url: url)
             (data, _) = try await session.data(for: request)
         } catch {
             throw TranscriptError.networkError(error)
@@ -220,7 +220,7 @@ public enum YouTubeTranscriptKit {
 
         let data: Data
         do {
-            var request = URLRequest(url: url)
+            let request = URLRequest(url: url)
             (data, _) = try await session.data(for: request)
         } catch {
             throw TranscriptError.networkError(error)
