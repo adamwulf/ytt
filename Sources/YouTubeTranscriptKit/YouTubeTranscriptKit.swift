@@ -84,7 +84,7 @@ public enum YouTubeTranscriptKit {
 
     // MARK: - Private
 
-    private static func extractVideoInfo(from htmlString: String, includeTranscript: Bool) async throws -> VideoInfo {
+    static func extractVideoInfo(from htmlString: String, includeTranscript: Bool) async throws -> VideoInfo {
         var searchRange = htmlString.startIndex..<htmlString.endIndex
 
         while let range = htmlString.range(of: "var ytInitialPlayerResponse = ", range: searchRange),
@@ -156,7 +156,7 @@ public enum YouTubeTranscriptKit {
         throw TranscriptError.noVideoInfo
     }
 
-    private static func extractCaptionTracks(from htmlString: String) throws -> [CaptionTrack] {
+    static func extractCaptionTracks(from htmlString: String) throws -> [CaptionTrack] {
         var allTracks: [CaptionTrack] = []
         var searchRange = htmlString.startIndex..<htmlString.endIndex
         var matchCount = 0
@@ -233,7 +233,7 @@ public enum YouTubeTranscriptKit {
         return try parseTranscriptXML(xmlString)
     }
 
-    private static func parseTranscriptXML(_ xml: String) throws -> [TranscriptMoment] {
+    static func parseTranscriptXML(_ xml: String) throws -> [TranscriptMoment] {
         var moments: [TranscriptMoment] = []
         var searchRange = xml.startIndex..<xml.endIndex
 
