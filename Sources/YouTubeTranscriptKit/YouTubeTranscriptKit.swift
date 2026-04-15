@@ -257,6 +257,10 @@ public enum YouTubeTranscriptKit {
             searchRange = endTagRange.upperBound..<xml.endIndex
         }
 
+        guard !moments.isEmpty else {
+            throw TranscriptError.noTranscriptData
+        }
+
         return moments
     }
 
