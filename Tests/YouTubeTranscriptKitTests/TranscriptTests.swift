@@ -238,6 +238,95 @@ final class TranscriptTests: XCTestCase {
         }
     }
 
+    func testExtractVideoInfoMalformedPlayerResponseThrowsParseError() async {
+        let sc = Self.sc
+        // The marker is present but the payload does not match the expected schema, which is what a
+        // YouTube markup change looks like. That must not masquerade as a missing video.
+        let html = "<html><script>var ytInitialPlayerResponse = "
+            + "{\"videoDetails\":{\"unexpectedKey\":true}}\(sc)</script></html>"
+
+        do {
+            _ = try await YouTubeTranscriptKit.extractVideoInfo(from: html, includeTranscript: false)
+            XCTFail("Expected videoInfoParseError")
+        } catch let error as YouTubeTranscriptKit.TranscriptError {
+            if case .videoInfoParseError(let underlying) = error {
+                XCTAssertTrue(underlying is DecodingError, "Expected the decode failure to be carried out, got \(underlying)")
+            } else {
+                XCTFail("Expected .videoInfoParseError, got \(error)")
+            }
+        } catch {
+            XCTFail("Unexpected error type: \(error)")
+        }
+    }
+
+    // MARK: - Rate Limit Detection Unit Tests
+
+    private func makeResponse(urlString: String, statusCode: Int) throws -> HTTPURLResponse {
+        let url = try XCTUnwrap(URL(string: urlString))
+        return try XCTUnwrap(HTTPURLResponse(url: url, statusCode: statusCode, httpVersion: "HTTP/1.1", headerFields: nil))
+    }
+
+    func testCaptchaWallRedirectIsRateLimited() throws {
+        // The real shape of the ban: URLSession follows the 302 to Google's "unusual traffic" wall,
+        // so the status we see is 200 and only the final URL gives it away.
+        let response = try makeResponse(
+            urlString: "https://www.google.com/sorry/index?continue=https://www.youtube.com/watch%3Fv%3Dh0EGCnBjTVk&q=abc",
+            statusCode: 200
+        )
+
+        XCTAssertThrowsError(try YouTubeTranscriptKit.validate(response)) { error in
+            guard let error = error as? YouTubeTranscriptKit.TranscriptError else {
+                return XCTFail("Expected TranscriptError, got \(error)")
+            }
+            guard case .rateLimited(let statusCode, let url) = error else {
+                return XCTFail("Expected .rateLimited, got \(error)")
+            }
+            XCTAssertEqual(statusCode, 200, "The CAPTCHA wall answers 200, so consumers must match the case not the status")
+            XCTAssertEqual(url?.host, "www.google.com")
+        }
+    }
+
+    func testTooManyRequestsIsRateLimited() throws {
+        let response = try makeResponse(urlString: "https://www.youtube.com/watch?v=h0EGCnBjTVk", statusCode: 429)
+
+        XCTAssertThrowsError(try YouTubeTranscriptKit.validate(response)) { error in
+            guard case .rateLimited(let statusCode, _)? = error as? YouTubeTranscriptKit.TranscriptError else {
+                return XCTFail("Expected .rateLimited, got \(error)")
+            }
+            XCTAssertEqual(statusCode, 429)
+        }
+    }
+
+    func testNonSuccessStatusIsHTTPError() throws {
+        let response = try makeResponse(urlString: "https://www.youtube.com/watch?v=h0EGCnBjTVk", statusCode: 404)
+
+        XCTAssertThrowsError(try YouTubeTranscriptKit.validate(response)) { error in
+            guard case .httpError(let statusCode, _)? = error as? YouTubeTranscriptKit.TranscriptError else {
+                return XCTFail("Expected .httpError, got \(error)")
+            }
+            XCTAssertEqual(statusCode, 404)
+        }
+    }
+
+    func testSuccessfulResponsePassesValidation() throws {
+        let response = try makeResponse(urlString: "https://www.youtube.com/watch?v=h0EGCnBjTVk", statusCode: 200)
+        XCTAssertNoThrow(try YouTubeTranscriptKit.validate(response))
+    }
+
+    func testIsCaptchaWallMatchesGoogleSorryPaths() {
+        XCTAssertTrue(YouTubeTranscriptKit.isCaptchaWall(URL(string: "https://www.google.com/sorry/index?continue=x")))
+        XCTAssertTrue(YouTubeTranscriptKit.isCaptchaWall(URL(string: "https://google.com/sorry/index")))
+        // Google serves the wall from country domains too
+        XCTAssertTrue(YouTubeTranscriptKit.isCaptchaWall(URL(string: "https://www.google.co.uk/sorry/index")))
+    }
+
+    func testIsCaptchaWallIgnoresUnrelatedURLs() {
+        XCTAssertFalse(YouTubeTranscriptKit.isCaptchaWall(URL(string: "https://www.youtube.com/watch?v=abc123")))
+        XCTAssertFalse(YouTubeTranscriptKit.isCaptchaWall(URL(string: "https://www.google.com/search?q=sorry")))
+        XCTAssertFalse(YouTubeTranscriptKit.isCaptchaWall(URL(string: "https://example.com/sorry/index")))
+        XCTAssertFalse(YouTubeTranscriptKit.isCaptchaWall(nil))
+    }
+
     // MARK: - Integration Tests
     // These tests hit the real YouTube API and are skipped by default.
     // Run with: YOUTUBE_INTEGRATION_TESTS=1 swift test --filter TranscriptTests/testIntegration

@@ -18,7 +18,34 @@ public enum YouTubeTranscriptKit {
         case noCaptionData
         case invalidXMLFormat
         case noVideoInfo
+        case videoInfoParseError(Error)
+        case rateLimited(statusCode: Int, url: URL?)
+        case httpError(statusCode: Int, url: URL?)
         case activityParseError(block: String, reason: String)
+    }
+
+    /// Rejects a response that carries no usable page, so a soft ban is not mistaken for a missing video.
+    ///
+    /// When Google rate limits a client it answers with a 302 to `google.com/sorry/...`, its
+    /// "unusual traffic from your computer network" CAPTCHA wall. URLSession follows that redirect
+    /// transparently, so the status code we observe is 200 and only the final URL reveals the ban.
+    /// Checking the status code alone misses it.
+    static func validate(_ response: URLResponse) throws {
+        guard let httpResponse = response as? HTTPURLResponse else { return }
+
+        if isCaptchaWall(httpResponse.url) || httpResponse.statusCode == 429 {
+            throw TranscriptError.rateLimited(statusCode: httpResponse.statusCode, url: httpResponse.url)
+        }
+
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw TranscriptError.httpError(statusCode: httpResponse.statusCode, url: httpResponse.url)
+        }
+    }
+
+    /// Whether a URL points at Google's CAPTCHA wall, matching country domains as well as google.com.
+    static func isCaptchaWall(_ url: URL?) -> Bool {
+        guard let url, let host = url.host?.lowercased() else { return false }
+        return host.contains("google.") && url.path.hasPrefix("/sorry")
     }
 
     private static func youtubeURL(fromID videoID: String) throws -> URL {
@@ -42,12 +69,15 @@ public enum YouTubeTranscriptKit {
 
     public static func getVideoInfo(url: URL, includeTranscript: Bool = true) async throws -> VideoInfo {
         let data: Data
+        let response: URLResponse
         do {
             let request = URLRequest(url: url)
-            (data, _) = try await session.data(for: request)
+            (data, response) = try await session.data(for: request)
         } catch {
             throw TranscriptError.networkError(error)
         }
+
+        try validate(response)
 
         guard let htmlString = String(data: data, encoding: .utf8) else {
             throw TranscriptError.invalidHTMLFormat
@@ -66,12 +96,15 @@ public enum YouTubeTranscriptKit {
 
     public static func getTranscript(url: URL) async throws -> [TranscriptMoment] {
         let data: Data
+        let response: URLResponse
         do {
             let request = URLRequest(url: url)
-            (data, _) = try await session.data(for: request)
+            (data, response) = try await session.data(for: request)
         } catch {
             throw TranscriptError.networkError(error)
         }
+
+        try validate(response)
 
         guard let htmlString = String(data: data, encoding: .utf8) else {
             throw TranscriptError.invalidHTMLFormat
@@ -86,6 +119,7 @@ public enum YouTubeTranscriptKit {
 
     static func extractVideoInfo(from htmlString: String, includeTranscript: Bool) async throws -> VideoInfo {
         var searchRange = htmlString.startIndex..<htmlString.endIndex
+        var lastDecodeError: Error?
 
         while let range = htmlString.range(of: "var ytInitialPlayerResponse = ", range: searchRange),
               let endRange = htmlString[range.upperBound...].range(of: ";</script>") {
@@ -146,11 +180,19 @@ public enum YouTubeTranscriptKit {
                         transcript: transcript
                     )
                 } catch {
-                    // Continue to next match on parse failure
+                    // Continue to next match on parse failure, but remember why this one failed.
+                    // If no match ever decodes, that error says far more than a bare noVideoInfo.
+                    lastDecodeError = error
                 }
             }
 
             searchRange = endRange.upperBound..<htmlString.endIndex
+        }
+
+        // The marker was present but nothing decoded, which points at a YouTube schema change
+        // rather than a video that is missing, private, or deleted.
+        if let lastDecodeError {
+            throw TranscriptError.videoInfoParseError(lastDecodeError)
         }
 
         throw TranscriptError.noVideoInfo
@@ -219,12 +261,15 @@ public enum YouTubeTranscriptKit {
         }
 
         let data: Data
+        let response: URLResponse
         do {
             let request = URLRequest(url: url)
-            (data, _) = try await session.data(for: request)
+            (data, response) = try await session.data(for: request)
         } catch {
             throw TranscriptError.networkError(error)
         }
+
+        try validate(response)
 
         guard let xmlString = String(data: data, encoding: .utf8) else {
             throw TranscriptError.invalidXMLFormat
