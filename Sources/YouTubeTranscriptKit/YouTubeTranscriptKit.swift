@@ -1,7 +1,11 @@
 import Foundation
 
 public enum YouTubeTranscriptKit {
-    private static let session: URLSession = {
+    /// The session used for every YouTube fetch.
+    ///
+    /// Internal rather than private so tests can install a URLProtocol stub and exercise the
+    /// response handling without hitting the network. Production code never reassigns it.
+    static var session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.httpCookieAcceptPolicy = .never
         config.httpShouldSetCookies = false
@@ -44,8 +48,34 @@ public enum YouTubeTranscriptKit {
 
     /// Whether a URL points at Google's CAPTCHA wall, matching country domains as well as google.com.
     static func isCaptchaWall(_ url: URL?) -> Bool {
-        guard let url, let host = url.host?.lowercased() else { return false }
-        return host.contains("google.") && url.path.hasPrefix("/sorry")
+        guard let url, let host = url.host?.lowercased(), url.path.hasPrefix("/sorry") else { return false }
+
+        // Match google.com and country domains such as google.co.uk, but not lookalikes like
+        // "notgoogle.com" or "google.com.example.net", by requiring "google" to be its own
+        // component within the last three (allowing a two-part suffix like ".co.uk").
+        let components = host.split(separator: ".")
+        guard let index = components.firstIndex(of: "google") else { return false }
+        return index >= components.count - 3
+    }
+
+    /// Whether an error means the fetch failed in a way that retrying later could fix.
+    ///
+    /// These propagate unwrapped so callers can back off instead of recording a partial result as a
+    /// success. Permanent failures are deliberately excluded: a caption track that is gone for good
+    /// answers 404 or 403 every time, and throwing for it would strand any caller that only marks a
+    /// video done on success, leaving it to retry that video every run and never drain its queue.
+    static func isTransientFetchFailure(_ error: Error) -> Bool {
+        guard let error = error as? TranscriptError else { return false }
+
+        switch error {
+        case .rateLimited, .networkError:
+            return true
+        case .httpError(let statusCode, _):
+            // 429 never reaches here; validate() turns it into rateLimited first.
+            return statusCode >= 500
+        default:
+            return false
+        }
     }
 
     private static func youtubeURL(fromID videoID: String) throws -> URL {
@@ -149,7 +179,12 @@ public enum YouTubeTranscriptKit {
                     let channelURL = URL(string: "https://www.youtube.com/channel/\(details.channelId)")
                     let videoURL = URL(string: "https://www.youtube.com/watch?v=\(details.videoId)")
 
-                    // Attempt to extract transcript if requested
+                    // Attempt to extract transcript if requested.
+                    // Captions that are absent or permanently unavailable degrade to a nil
+                    // transcript, which is the ordinary case. A ban or other transient failure must
+                    // instead fail the whole call: degrading it would return a VideoInfo that looks
+                    // complete while silently missing a transcript the video really has, and
+                    // callers cannot tell that apart from a video with no captions at all.
                     let transcript: [TranscriptMoment]?
                     do {
                         if includeTranscript {
@@ -158,6 +193,8 @@ public enum YouTubeTranscriptKit {
                         } else {
                             transcript = nil
                         }
+                    } catch let error where isTransientFetchFailure(error) {
+                        throw error
                     } catch {
                         transcript = nil
                     }
@@ -179,10 +216,15 @@ public enum YouTubeTranscriptKit {
                         videoURL: videoURL,
                         transcript: transcript
                     )
-                } catch {
+                } catch let error as DecodingError {
                     // Continue to next match on parse failure, but remember why this one failed.
                     // If no match ever decodes, that error says far more than a bare noVideoInfo.
                     lastDecodeError = error
+                } catch {
+                    // Only a decode failure means a schema change. Anything else reaching here came
+                    // from the fetch above, and disguising it as videoInfoParseError would break
+                    // `if case .rateLimited` for callers and hide the ban all over again.
+                    throw error
                 }
             }
 
@@ -247,6 +289,11 @@ public enum YouTubeTranscriptKit {
         for track in tracks {
             do {
                 return try await getTranscriptText(from: track)
+            } catch let error where isTransientFetchFailure(error) {
+                // A ban or server failure will meet every remaining track too, and walking the rest
+                // would only bury the reason under a misleading noTranscriptData. Fail with the
+                // real cause instead.
+                throw error
             } catch {
                 continue
             }
