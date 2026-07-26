@@ -126,6 +126,19 @@ final class TrailingScriptTests: XCTestCase {
         }
     }
 
+    /// The same real page without the appended statement — the shape the default CFNetwork user
+    /// agent receives, which parsed before this fix and has to keep parsing after it. Deriving it
+    /// from the same fixture keeps the two cases honest: the only difference is the 169-byte tail.
+    func testRealPageWithoutTrailingStatementsStillParses() async throws {
+        let clean = try chromeUserAgentPage()
+            .replacingOccurrences(of: Self.trailingScript, with: "")
+        XCTAssertFalse(clean.contains("var meta"), "Tail was not removed, so this proves nothing")
+
+        let info = try await YouTubeTranscriptKit.extractVideoInfo(from: clean, includeTranscript: false)
+        XCTAssertEqual(info.videoId, "jUa2x_xpFuM")
+        XCTAssertEqual(try YouTubeTranscriptKit.extractCaptionTracks(from: clean).count, 2)
+    }
+
     func testTrailingStatementsDoNotBreakCaptionExtraction() throws {
         let json = #"{"captions":{"playerCaptionsTracklistRenderer":{"captionTracks":"#
             + #"[{"baseUrl":"https://example.com/t","vssId":".en","languageCode":"en"}]}}}"#
