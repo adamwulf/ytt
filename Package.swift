@@ -27,7 +27,8 @@ let package = Package(
         ),
         .testTarget(
             name: "YouTubeTranscriptKitTests",
-            dependencies: ["YouTubeTranscriptKit"]
+            dependencies: ["YouTubeTranscriptKit"],
+            resources: [.copy("Fixtures")]
         )
     ]
 )
