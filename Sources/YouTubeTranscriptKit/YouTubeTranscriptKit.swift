@@ -139,88 +139,134 @@ public enum YouTubeTranscriptKit {
 
     // MARK: - Private
 
-    static func extractVideoInfo(from htmlString: String, includeTranscript: Bool) async throws -> VideoInfo {
+    /// The bytes of the first complete JSON object in `data`, ignoring anything that follows it.
+    ///
+    /// The player response is read out of a script block by searching for the `;</script>` that ends
+    /// the statement, but that is not always where the JSON ends: YouTube appends further statements
+    /// to the same block for some clients, so the terminator can sit well past the closing brace and
+    /// the decoder is handed `{...};var meta = ...`.
+    ///
+    /// Finding the boundary is left to the parser, which already reports it. A hand-written scanner
+    /// would have to track strings and escapes to know that the `}` in `{"a":"}"}` is not the end,
+    /// and every such scanner is a second JSON implementation waiting to disagree with the first.
+    ///
+    /// Returns nil when the leading bytes are not themselves a complete object. That guard is what
+    /// keeps a genuine schema change loud: the error index then lands mid-object, the prefix fails to
+    /// parse, and the caller reports a parse error instead of accepting a truncated response.
+    static func leadingJSONObject(in data: Data) -> Data? {
+        do {
+            _ = try JSONSerialization.jsonObject(with: data)
+            return data
+        } catch let error as NSError {
+            // Reported for trailing-garbage failures as the offset just past the top-level value.
+            guard let index = error.userInfo["NSJSONSerializationErrorIndex"] as? Int,
+                  index > 0, index <= data.count else {
+                return nil
+            }
+
+            let prefix = Data(data.prefix(index))
+            guard (try? JSONSerialization.jsonObject(with: prefix)) != nil else { return nil }
+            return prefix
+        }
+    }
+
+    /// Every `ytInitialPlayerResponse` blob embedded in a watch page, in document order.
+    ///
+    /// Shared so the video-info and caption paths always decode exactly the same bytes. They read
+    /// the same script block, and when only one of them compensated for a trailing statement the
+    /// other failed invisibly.
+    static func playerResponseBlobs(in htmlString: String) -> [Data] {
+        var blobs: [Data] = []
         var searchRange = htmlString.startIndex..<htmlString.endIndex
-        var lastDecodeError: Error?
 
         while let range = htmlString.range(of: "var ytInitialPlayerResponse = ", range: searchRange),
               let endRange = htmlString[range.upperBound...].range(of: ";</script>") {
-            let jsonString = String(htmlString[range.upperBound..<endRange.lowerBound])
-
-            if let jsonData = jsonString.data(using: .utf8) {
-                do {
-                    let response = try JSONDecoder().decode(VideoResponse.self, from: jsonData)
-                    let details = response.videoDetails
-                    let microformat = response.microformat.playerMicroformatRenderer
-
-                    // Parse dates
-                    let dateFormatter = ISO8601DateFormatter()
-                    let publishedAt = dateFormatter.date(from: microformat.publishDate)
-                    let uploadedAt = dateFormatter.date(from: microformat.uploadDate)
-
-                    // Convert string values to appropriate types
-                    let viewCount = Int(details.viewCount)
-                    let lengthSeconds = Int(details.lengthSeconds)
-
-                    // Convert thumbnails
-                    let thumbnails = details.thumbnail.thumbnails.map { thumb in
-                        VideoThumbnail(url: thumb.url, width: thumb.width, height: thumb.height)
-                    }
-
-                    // Build URLs
-                    let channelURL = URL(string: "https://www.youtube.com/channel/\(details.channelId)")
-                    let videoURL = URL(string: "https://www.youtube.com/watch?v=\(details.videoId)")
-
-                    // Attempt to extract transcript if requested.
-                    // Captions that are absent or permanently unavailable degrade to a nil
-                    // transcript, which is the ordinary case. A ban or other transient failure must
-                    // instead fail the whole call: degrading it would return a VideoInfo that looks
-                    // complete while silently missing a transcript the video really has, and
-                    // callers cannot tell that apart from a video with no captions at all.
-                    let transcript: [TranscriptMoment]?
-                    do {
-                        if includeTranscript {
-                            let captionTracks = try extractCaptionTracks(from: htmlString)
-                            transcript = try await getTranscriptText(from: captionTracks)
-                        } else {
-                            transcript = nil
-                        }
-                    } catch let error where isTransientFetchFailure(error) {
-                        throw error
-                    } catch {
-                        transcript = nil
-                    }
-
-                    return VideoInfo(
-                        videoId: details.videoId,
-                        title: details.title,
-                        channelId: details.channelId,
-                        channelName: details.author,
-                        description: details.shortDescription,
-                        publishedAt: publishedAt,
-                        uploadedAt: uploadedAt,
-                        viewCount: viewCount,
-                        duration: lengthSeconds,
-                        category: microformat.category,
-                        isLive: microformat.liveBroadcastDetails?.isLiveNow,
-                        thumbnails: thumbnails,
-                        channelURL: channelURL,
-                        videoURL: videoURL,
-                        transcript: transcript
-                    )
-                } catch let error as DecodingError {
-                    // Continue to next match on parse failure, but remember why this one failed.
-                    // If no match ever decodes, that error says far more than a bare noVideoInfo.
-                    lastDecodeError = error
-                } catch {
-                    // Only a decode failure means a schema change. Anything else reaching here came
-                    // from the fetch above, and disguising it as videoInfoParseError would break
-                    // `if case .rateLimited` for callers and hide the ban all over again.
-                    throw error
-                }
+            if let data = String(htmlString[range.upperBound..<endRange.lowerBound]).data(using: .utf8) {
+                // Untrimmable bytes are passed through rather than dropped: the caller's decode then
+                // fails with the real reason, which is worth far more than a silently missing blob.
+                blobs.append(leadingJSONObject(in: data) ?? data)
             }
 
             searchRange = endRange.upperBound..<htmlString.endIndex
+        }
+
+        return blobs
+    }
+
+    static func extractVideoInfo(from htmlString: String, includeTranscript: Bool) async throws -> VideoInfo {
+        var lastDecodeError: Error?
+
+        for jsonData in playerResponseBlobs(in: htmlString) {
+            do {
+                let response = try JSONDecoder().decode(VideoResponse.self, from: jsonData)
+                let details = response.videoDetails
+                let microformat = response.microformat.playerMicroformatRenderer
+
+                // Parse dates
+                let dateFormatter = ISO8601DateFormatter()
+                let publishedAt = dateFormatter.date(from: microformat.publishDate)
+                let uploadedAt = dateFormatter.date(from: microformat.uploadDate)
+
+                // Convert string values to appropriate types
+                let viewCount = Int(details.viewCount)
+                let lengthSeconds = Int(details.lengthSeconds)
+
+                // Convert thumbnails
+                let thumbnails = details.thumbnail.thumbnails.map { thumb in
+                    VideoThumbnail(url: thumb.url, width: thumb.width, height: thumb.height)
+                }
+
+                // Build URLs
+                let channelURL = URL(string: "https://www.youtube.com/channel/\(details.channelId)")
+                let videoURL = URL(string: "https://www.youtube.com/watch?v=\(details.videoId)")
+
+                // Attempt to extract transcript if requested.
+                // Captions that are absent or permanently unavailable degrade to a nil
+                // transcript, which is the ordinary case. A ban or other transient failure must
+                // instead fail the whole call: degrading it would return a VideoInfo that looks
+                // complete while silently missing a transcript the video really has, and
+                // callers cannot tell that apart from a video with no captions at all.
+                let transcript: [TranscriptMoment]?
+                do {
+                    if includeTranscript {
+                        let captionTracks = try extractCaptionTracks(from: htmlString)
+                        transcript = try await getTranscriptText(from: captionTracks)
+                    } else {
+                        transcript = nil
+                    }
+                } catch let error where isTransientFetchFailure(error) {
+                    throw error
+                } catch {
+                    transcript = nil
+                }
+
+                return VideoInfo(
+                    videoId: details.videoId,
+                    title: details.title,
+                    channelId: details.channelId,
+                    channelName: details.author,
+                    description: details.shortDescription,
+                    publishedAt: publishedAt,
+                    uploadedAt: uploadedAt,
+                    viewCount: viewCount,
+                    duration: lengthSeconds,
+                    category: microformat.category,
+                    isLive: microformat.liveBroadcastDetails?.isLiveNow,
+                    thumbnails: thumbnails,
+                    channelURL: channelURL,
+                    videoURL: videoURL,
+                    transcript: transcript
+                )
+            } catch let error as DecodingError {
+                // Continue to next match on parse failure, but remember why this one failed.
+                // If no match ever decodes, that error says far more than a bare noVideoInfo.
+                lastDecodeError = error
+            } catch {
+                // Only a decode failure means a schema change. Anything else reaching here came
+                // from the fetch above, and disguising it as videoInfoParseError would break
+                // `if case .rateLimited` for callers and hide the ban all over again.
+                throw error
+            }
         }
 
         // The marker was present but nothing decoded, which points at a YouTube schema change
@@ -234,26 +280,20 @@ public enum YouTubeTranscriptKit {
 
     static func extractCaptionTracks(from htmlString: String) throws -> [CaptionTrack] {
         var allTracks: [CaptionTrack] = []
-        var searchRange = htmlString.startIndex..<htmlString.endIndex
-        var matchCount = 0
 
-        while let range = htmlString.range(of: "var ytInitialPlayerResponse = ", range: searchRange),
-              let endRange = htmlString[range.upperBound...].range(of: ";</script>") {
-            matchCount += 1
-
-            let jsonString = String(htmlString[range.upperBound..<endRange.lowerBound])
-
-            if let jsonData = jsonString.data(using: .utf8) {
-                do {
-                    let response = try JSONDecoder().decode(CaptionsResponse.self, from: jsonData)
-                    let tracks = response.captions.playerCaptionsTracklistRenderer.captionTracks
-                    allTracks.append(contentsOf: tracks)
-                } catch {
-                    // Silently continue to next match on parse failure
-                }
+        for jsonData in playerResponseBlobs(in: htmlString) {
+            do {
+                let response = try JSONDecoder().decode(CaptionsResponse.self, from: jsonData)
+                let tracks = response.captions.playerCaptionsTracklistRenderer.captionTracks
+                allTracks.append(contentsOf: tracks)
+            } catch {
+                // A video with no captions is the ordinary case and reaches here as a missing key,
+                // so a decode failure cannot be told apart from "no captions" and the loop moves on.
+                // That tolerance is why a malformed blob is invisible here: it surfaces as
+                // noCaptionData, which callers treat as a no-op rather than an error. Whatever this
+                // swallows must therefore never be a blob that would have decoded — hence the shared
+                // trimming in playerResponseBlobs rather than a fix on the video-info path alone.
             }
-
-            searchRange = endRange.upperBound..<htmlString.endIndex
         }
 
         guard !allTracks.isEmpty else {
