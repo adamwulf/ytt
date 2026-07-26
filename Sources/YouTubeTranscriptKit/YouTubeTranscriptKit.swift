@@ -139,42 +139,20 @@ public enum YouTubeTranscriptKit {
 
     // MARK: - Private
 
-    /// The bytes of the first complete JSON object in `data`, ignoring anything that follows it.
-    ///
-    /// The player response is read out of a script block by searching for the `;</script>` that ends
-    /// the statement, but that is not always where the JSON ends: YouTube appends further statements
-    /// to the same block for some clients, so the terminator can sit well past the closing brace and
-    /// the decoder is handed `{...};var meta = ...`.
-    ///
-    /// Finding the boundary is left to the parser, which already reports it. A hand-written scanner
-    /// would have to track strings and escapes to know that the `}` in `{"a":"}"}` is not the end,
-    /// and every such scanner is a second JSON implementation waiting to disagree with the first.
-    ///
-    /// Returns nil when the leading bytes are not themselves a complete object. That guard is what
-    /// keeps a genuine schema change loud: the error index then lands mid-object, the prefix fails to
-    /// parse, and the caller reports a parse error instead of accepting a truncated response.
-    static func leadingJSONObject(in data: Data) -> Data? {
-        do {
-            _ = try JSONSerialization.jsonObject(with: data)
-            return data
-        } catch let error as NSError {
-            // Reported for trailing-garbage failures as the offset just past the top-level value.
-            guard let index = error.userInfo["NSJSONSerializationErrorIndex"] as? Int,
-                  index > 0, index <= data.count else {
-                return nil
-            }
-
-            let prefix = Data(data.prefix(index))
-            guard (try? JSONSerialization.jsonObject(with: prefix)) != nil else { return nil }
-            return prefix
-        }
-    }
-
     /// Every `ytInitialPlayerResponse` blob embedded in a watch page, in document order.
     ///
     /// Shared so the video-info and caption paths always decode exactly the same bytes. They read
     /// the same script block, and when only one of them compensated for a trailing statement the
     /// other failed invisibly.
+    ///
+    /// The slice runs to the first `;</script>`, which ends the statement but is not always the end
+    /// of the JSON — YouTube appends further statements to the same block for some clients, leaving
+    /// the decoder with `{...};var meta = ...`. `leadingJSONValueBytes` trims that back off.
+    ///
+    /// A literal `;</script>` *inside* the JSON would cut the slice short instead, and no amount of
+    /// trimming recovers that. It does not arise because YouTube escapes forward slashes in these
+    /// blobs, so the sequence appears as `<\/script>`; the failure would be a loud parse error rather
+    /// than bad data, and `testLiteralTerminatorInsideJSONFailsLoudly` pins that.
     static func playerResponseBlobs(in htmlString: String) -> [Data] {
         var blobs: [Data] = []
         var searchRange = htmlString.startIndex..<htmlString.endIndex
@@ -184,7 +162,7 @@ public enum YouTubeTranscriptKit {
             if let data = String(htmlString[range.upperBound..<endRange.lowerBound]).data(using: .utf8) {
                 // Untrimmable bytes are passed through rather than dropped: the caller's decode then
                 // fails with the real reason, which is worth far more than a silently missing blob.
-                blobs.append(leadingJSONObject(in: data) ?? data)
+                blobs.append(leadingJSONValueBytes(in: data) ?? data)
             }
 
             searchRange = endRange.upperBound..<htmlString.endIndex
@@ -195,8 +173,11 @@ public enum YouTubeTranscriptKit {
 
     static func extractVideoInfo(from htmlString: String, includeTranscript: Bool) async throws -> VideoInfo {
         var lastDecodeError: Error?
+        // Sliced once and handed to the caption path below, which would otherwise re-scan the page
+        // and re-trim every blob to reach the same bytes.
+        let blobs = playerResponseBlobs(in: htmlString)
 
-        for jsonData in playerResponseBlobs(in: htmlString) {
+        for jsonData in blobs {
             do {
                 let response = try JSONDecoder().decode(VideoResponse.self, from: jsonData)
                 let details = response.videoDetails
@@ -229,7 +210,7 @@ public enum YouTubeTranscriptKit {
                 let transcript: [TranscriptMoment]?
                 do {
                     if includeTranscript {
-                        let captionTracks = try extractCaptionTracks(from: htmlString)
+                        let captionTracks = try extractCaptionTracks(from: blobs)
                         transcript = try await getTranscriptText(from: captionTracks)
                     } else {
                         transcript = nil
@@ -279,9 +260,13 @@ public enum YouTubeTranscriptKit {
     }
 
     static func extractCaptionTracks(from htmlString: String) throws -> [CaptionTrack] {
+        return try extractCaptionTracks(from: playerResponseBlobs(in: htmlString))
+    }
+
+    static func extractCaptionTracks(from blobs: [Data]) throws -> [CaptionTrack] {
         var allTracks: [CaptionTrack] = []
 
-        for jsonData in playerResponseBlobs(in: htmlString) {
+        for jsonData in blobs {
             do {
                 let response = try JSONDecoder().decode(CaptionsResponse.self, from: jsonData)
                 let tracks = response.captions.playerCaptionsTracklistRenderer.captionTracks
@@ -290,9 +275,7 @@ public enum YouTubeTranscriptKit {
                 // A video with no captions is the ordinary case and reaches here as a missing key,
                 // so a decode failure cannot be told apart from "no captions" and the loop moves on.
                 // That tolerance is why a malformed blob is invisible here: it surfaces as
-                // noCaptionData, which callers treat as a no-op rather than an error. Whatever this
-                // swallows must therefore never be a blob that would have decoded — hence the shared
-                // trimming in playerResponseBlobs rather than a fix on the video-info path alone.
+                // noCaptionData, which callers treat as a no-op rather than an error.
             }
         }
 
