@@ -48,33 +48,22 @@ final class StubURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
-final class StubbedFetchTests: XCTestCase {
+/// Canned YouTube payloads, shared by every test that needs a fetch to get somewhere.
+enum WatchPageFixture {
 
     // UnicodeScalar(59) produces the semicolon that terminates the player response script block
     private static let sc = String(UnicodeScalar(59))
 
-    private static let videoURL = URL(string: "https://www.youtube.com/watch?v=abc123")!
-    private static let captionURL = URL(string: "https://www.youtube.com/api/timedtext?v=abc123")!
-    private static let captchaURL = URL(string: "https://www.google.com/sorry/index?continue=https://www.youtube.com/watch%3Fv%3Dabc123")!
+    static let videoURL = URL(string: "https://www.youtube.com/watch?v=abc123")!
+    static let captionURL = URL(string: "https://www.youtube.com/api/timedtext?v=abc123")!
+    static let captchaURL = URL(string: "https://www.google.com/sorry/index?continue=https://www.youtube.com/watch%3Fv%3Dabc123")!
 
-    private var originalSession: URLSession!
-
-    override func setUp() {
-        super.setUp()
-        originalSession = YouTubeTranscriptKit.session
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [StubURLProtocol.self]
-        YouTubeTranscriptKit.session = URLSession(configuration: config)
-    }
-
-    override func tearDown() {
-        YouTubeTranscriptKit.session = originalSession
-        StubURLProtocol.handler = nil
-        super.tearDown()
+    static func isCaptionRequest(_ request: URLRequest) -> Bool {
+        return request.url?.path.contains("timedtext") == true
     }
 
     /// A watch page that parses cleanly and advertises one caption track, so the caption fetch runs.
-    private static func watchPageHTML() -> String {
+    static func html() -> String {
         return "<html><script>var ytInitialPlayerResponse = "
             + "{\"videoDetails\":{\"videoId\":\"abc123\",\"title\":\"Test Video\","
             + "\"lengthSeconds\":\"120\",\"channelId\":\"UCtest\","
@@ -93,9 +82,36 @@ final class StubbedFetchTests: XCTestCase {
             + "{\"baseUrl\":\"\(captionURL.absoluteString)\",\"vssId\":\".en\",\"languageCode\":\"en\"}]}}}"
             + "\(sc)</script></html>"
     }
+}
+
+final class StubbedFetchTests: XCTestCase {
+
+    private static let videoURL = WatchPageFixture.videoURL
+    private static let captionURL = WatchPageFixture.captionURL
+    private static let captchaURL = WatchPageFixture.captchaURL
+
+    private var originalSession: URLSession!
+
+    override func setUp() {
+        super.setUp()
+        originalSession = YouTubeTranscriptKit.session
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [StubURLProtocol.self]
+        YouTubeTranscriptKit.session = URLSession(configuration: config)
+    }
+
+    override func tearDown() {
+        YouTubeTranscriptKit.session = originalSession
+        StubURLProtocol.handler = nil
+        super.tearDown()
+    }
+
+    private static func watchPageHTML() -> String {
+        return WatchPageFixture.html()
+    }
 
     private static func isCaptionRequest(_ request: URLRequest) -> Bool {
-        return request.url?.path.contains("timedtext") == true
+        return WatchPageFixture.isCaptionRequest(request)
     }
 
     private func assertRateLimited(_ error: Error, file: StaticString = #filePath, line: UInt = #line) {

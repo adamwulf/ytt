@@ -1,16 +1,8 @@
 import Foundation
 
 public enum YouTubeTranscriptKit {
-    /// The session used for every YouTube fetch.
-    ///
-    /// Internal rather than private so tests can install a URLProtocol stub and exercise the
-    /// response handling without hitting the network. Production code never reassigns it.
-    static var session: URLSession = {
-        let config = URLSessionConfiguration.ephemeral
-        config.httpCookieAcceptPolicy = .never
-        config.httpShouldSetCookies = false
-        return URLSession(configuration: config)
-    }()
+    // The session every fetch runs through, and the `configure(_:)` hook that builds it, live in
+    // Configuration.swift.
 
     public enum TranscriptError: Error {
         case invalidURL
