@@ -67,12 +67,22 @@ enum WatchPage {
         return try String(contentsOf: url, encoding: .utf8)
     }
 
-    /// The player-response bytes from that page, with the appended statements already trimmed.
+    /// The player-response bytes from that page, with the appended statements removed.
+    ///
+    /// The tail is stripped by name rather than by `leadingJSONValueBytes`, so a test that exercises
+    /// that helper does not build its own baseline with it. Deriving the input from the function
+    /// under test would let a broken helper quietly redefine what the test is measuring.
     static func chromeUserAgentPlayerResponse() throws -> Data {
         let html = try chromeUserAgentHTML()
         let marker = try XCTUnwrap(html.range(of: "var ytInitialPlayerResponse = "))
         let end = try XCTUnwrap(html[marker.upperBound...].range(of: terminator))
-        let sliced = Data(String(html[marker.upperBound..<end.lowerBound]).utf8)
-        return try XCTUnwrap(leadingJSONValueBytes(in: sliced))
+        let json = String(html[marker.upperBound..<end.lowerBound])
+            .replacingOccurrences(of: trailingScript, with: "")
+
+        let data = Data(json.utf8)
+        // Independent proof the baseline really is the whole player response and nothing more.
+        XCTAssertNotNil(try? JSONSerialization.jsonObject(with: data),
+                        "Fixture baseline is not valid JSON on its own")
+        return data
     }
 }

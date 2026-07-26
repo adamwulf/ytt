@@ -80,7 +80,10 @@ final class JSONBoundaryTests: XCTestCase {
         let complete = try WatchPage.chromeUserAgentPlayerResponse()
         let tail = Data(WatchPage.trailingScript.utf8)
 
-        var cuts = Set(complete.indices.filter { complete[$0] == UInt8(ascii: "}") }.map { $0 + 1 })
+        // Offsets via enumerated() rather than indices, because prefix(_:) counts from the start of
+        // the collection while a Data slice's indices do not. They agree for this baseline, and
+        // would silently stop agreeing if it ever became a slice.
+        var cuts = Set(complete.enumerated().compactMap { $0.element == UInt8(ascii: "}") ? $0.offset + 1 : nil })
         let braceCuts = cuts.count
         cuts.formUnion(stride(from: 1, to: complete.count, by: 97))
         cuts.remove(complete.count)  // the whole value is not a truncation
