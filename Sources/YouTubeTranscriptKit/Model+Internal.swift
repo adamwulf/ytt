@@ -19,8 +19,12 @@ struct Microformat: Codable {
 }
 
 struct PlayerMicroformat: Codable {
-    let title: TextRuns
-    let description: TextRuns?
+    // Nothing reads these two: the public title and description come from videoDetails. They stay
+    // modelled because the microformat copies are the localized ones, but they decode leniently —
+    // see RenderedText. A required field nothing reads is pure liability, and this pair proved it by
+    // failing every video once YouTube switched them from runs to simpleText.
+    let title: RenderedText?
+    let description: RenderedText?
     let lengthSeconds: String
     let externalChannelId: String
     let category: String
@@ -31,8 +35,37 @@ struct PlayerMicroformat: Codable {
     let liveBroadcastDetails: LiveBroadcastDetails?
 }
 
-struct TextRuns: Codable {
-    let runs: [TextRun]
+/// Text that YouTube renders either as `{"runs":[{"text":"..."}]}` or `{"simpleText":"..."}`.
+///
+/// Which one appears varies by field and changes over time, so both are accepted, and any other
+/// shape decodes to a nil `text` rather than throwing. That leniency is deliberate but narrow: it
+/// belongs to fields nothing depends on. Everything the parser actually reads stays strict, so a
+/// schema change that matters still surfaces as `videoInfoParseError` instead of quietly vanishing.
+struct RenderedText: Codable {
+    let text: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case runs
+        case simpleText
+    }
+
+    init(from decoder: Decoder) throws {
+        guard let container = try? decoder.container(keyedBy: CodingKeys.self) else {
+            text = nil
+            return
+        }
+
+        if let runs = try? container.decode([TextRun].self, forKey: .runs) {
+            text = runs.map(\.text).joined()
+        } else {
+            text = try? container.decode(String.self, forKey: .simpleText)
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(text, forKey: .simpleText)
+    }
 }
 
 struct TextRun: Codable {
