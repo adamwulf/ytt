@@ -68,31 +68,35 @@ final class JSONBoundaryTests: XCTestCase {
         XCTAssertNil(leadingJSONValueBytes(in: Data("not json at all".utf8)))
     }
 
-    /// No proper prefix of a complete JSON value is itself valid JSON, so a truncated object cannot
-    /// come back from this. Cutting a real player response at every closing brace is the blunt way
-    /// to show it, and it is the invariant that matters most: a partial object would be persisted as
-    /// a complete video record.
+    /// No proper prefix of a complete JSON value is itself valid JSON, so a truncated object must
+    /// never come back from this. It is the invariant that matters most, because a partial object
+    /// would be persisted as a complete video record.
+    ///
+    /// Every cut here is strictly shorter than the whole value, so ANY non-nil return is a partial
+    /// object by definition — which makes nil the entire assertion. Cut points include the offset
+    /// just past every closing brace, since those are the only places a balanced-looking prefix
+    /// could end; a plain stride samples almost none of them.
     func testNoTruncationOfARealResponseEverSurvives() throws {
-        let page = try TrailingScriptTests.chromeUserAgentPageHTML()
-        let marker = try XCTUnwrap(page.range(of: "var ytInitialPlayerResponse = "))
-        let end = try XCTUnwrap(page[marker.upperBound...].range(of: WatchPage.terminator))
-        let full = Data(String(page[marker.upperBound..<end.lowerBound]).utf8)
+        let complete = try WatchPage.chromeUserAgentPlayerResponse()
+        let tail = Data(WatchPage.trailingScript.utf8)
 
-        let complete = try XCTUnwrap(leadingJSONValueBytes(in: full))
-        var checked = 0
+        var cuts = Set(complete.indices.filter { complete[$0] == UInt8(ascii: "}") }.map { $0 + 1 })
+        let braceCuts = cuts.count
+        cuts.formUnion(stride(from: 1, to: complete.count, by: 97))
+        cuts.remove(complete.count)  // the whole value is not a truncation
 
-        for cut in stride(from: 1, to: complete.count, by: 97) {
+        for cut in cuts.sorted() {
             let truncated = Data(complete.prefix(cut))
-            if let recovered = leadingJSONValueBytes(in: truncated) {
-                // The only prefix allowed to survive is one that is already a complete value.
-                XCTAssertNotNil(try? JSONSerialization.jsonObject(with: recovered))
-                XCTAssertEqual(recovered.count, truncated.count,
-                               "Returned a shortened object for a cut at \(cut)")
-            }
-            checked += 1
+            XCTAssertNil(leadingJSONValueBytes(in: truncated),
+                         "Cut at \(cut) survived recovery")
+            // The production shape is a truncated value followed by the appended statements, which
+            // is the only version of this that exercises trimming on truncated input.
+            XCTAssertNil(leadingJSONValueBytes(in: truncated + tail),
+                         "Cut at \(cut) with trailing statements survived recovery")
         }
 
-        XCTAssertGreaterThan(checked, 50, "Sweep did not cover enough cut points to mean anything")
+        XCTAssertGreaterThan(braceCuts, 15, "Sweep missed the closing braces it claims to cover")
+        XCTAssertGreaterThan(cuts.count, 50, "Sweep did not cover enough cut points to mean anything")
     }
 
     /// Pins the Foundation behaviour the recovery leans on. If `NSJSONSerializationErrorIndex` stops

@@ -67,10 +67,28 @@ final class MicroformatTextTests: XCTestCase {
         XCTAssertNil(unknown.text)
     }
 
+    /// No microformat member that nothing reads may fail a decode — that is the whole point of the
+    /// branch, and leaving any of them required would have been the next outage of the same class.
+    /// Note `lengthSeconds` belongs here, not in the strict list: the duration callers get is parsed
+    /// from `videoDetails.lengthSeconds`, and the microformat copy is never touched.
+    func testUnreadMicroformatMembersCanAllDisappear() async throws {
+        var members = WatchPage.microformatMembers
+        for unread in ["title", "description", "lengthSeconds", "externalChannelId",
+                       "ownerChannelName", "ownerProfileUrl"] {
+            members.removeValue(forKey: unread)
+        }
+        let page = WatchPage.page(json: WatchPage.playerResponse(microformat: members))
+
+        let info = try await YouTubeTranscriptKit.extractVideoInfo(from: page, includeTranscript: false)
+        XCTAssertEqual(info.videoId, "abc123")
+        XCTAssertEqual(info.duration, 1, "Duration must still come from videoDetails")
+        XCTAssertEqual(info.category, "Education")
+    }
+
     /// The leniency is scoped to fields nothing reads. A field the parser depends on must still fail
     /// loudly, or a real schema change reaches callers as a plausible-looking blank.
     func testFieldsThatAreActuallyReadStayStrict() async {
-        for required in ["category", "publishDate", "uploadDate", "lengthSeconds"] {
+        for required in ["category", "publishDate", "uploadDate"] {
             var members = WatchPage.microformatMembers
             members.removeValue(forKey: required)
             let page = WatchPage.page(json: WatchPage.playerResponse(microformat: members))

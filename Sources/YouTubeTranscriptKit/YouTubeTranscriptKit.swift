@@ -151,8 +151,10 @@ public enum YouTubeTranscriptKit {
     ///
     /// A literal `;</script>` *inside* the JSON would cut the slice short instead, and no amount of
     /// trimming recovers that. It does not arise because YouTube escapes forward slashes in these
-    /// blobs, so the sequence appears as `<\/script>`; the failure would be a loud parse error rather
-    /// than bad data, and `testLiteralTerminatorInsideJSONFailsLoudly` pins that.
+    /// blobs, so the sequence appears as `<\/script>`. If it ever did arise, the video-info path
+    /// would report a parse error — `testLiteralTerminatorInsideJSONFailsLoudly` pins that — while
+    /// the caption path would report `noCaptionData`, since it has no way to distinguish a broken
+    /// blob from a video that simply has no captions.
     static func playerResponseBlobs(in htmlString: String) -> [Data] {
         var blobs: [Data] = []
         var searchRange = htmlString.startIndex..<htmlString.endIndex

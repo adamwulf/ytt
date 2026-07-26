@@ -1,4 +1,6 @@
 import Foundation
+import XCTest
+@testable import YouTubeTranscriptKit
 
 /// Builds watch pages for the parser tests.
 ///
@@ -52,5 +54,25 @@ enum WatchPage {
     /// between the JSON and the terminator, which is the shape that caused the parse failures.
     static func page(json: String, trailing: String = "") -> String {
         return "<html><script>var ytInitialPlayerResponse = " + json + trailing + terminator + "</html>"
+    }
+
+    /// Captured from a real fetch with a Chrome user agent — the page that produced
+    /// `videoInfoParseError` for every video in the backfill. Reduced to the members the parser
+    /// reads, because the rest carried signed URLs holding the fetching machine's IP.
+    static func chromeUserAgentHTML() throws -> String {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "chrome-ua-watch-page",
+                                                  withExtension: "html",
+                                                  subdirectory: "Fixtures"),
+                                "Missing chrome-ua-watch-page.html fixture")
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    /// The player-response bytes from that page, with the appended statements already trimmed.
+    static func chromeUserAgentPlayerResponse() throws -> Data {
+        let html = try chromeUserAgentHTML()
+        let marker = try XCTUnwrap(html.range(of: "var ytInitialPlayerResponse = "))
+        let end = try XCTUnwrap(html[marker.upperBound...].range(of: terminator))
+        let sliced = Data(String(html[marker.upperBound..<end.lowerBound]).utf8)
+        return try XCTUnwrap(leadingJSONValueBytes(in: sliced))
     }
 }

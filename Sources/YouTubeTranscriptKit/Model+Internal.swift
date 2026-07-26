@@ -19,23 +19,29 @@ struct Microformat: Decodable {
 }
 
 struct PlayerMicroformat: Decodable {
-    // Nothing reads these two: the public title and description come from videoDetails. They stay
-    // modelled because the microformat copies are the localized ones, but they decode leniently —
-    // see RenderedText. A required field nothing reads is pure liability, and this pair proved it by
-    // failing every video once YouTube switched them from runs to simpleText.
-    //
-    // Optional and lenient defend against different changes, and both are load-bearing: the decoder
-    // covers a value arriving in an unfamiliar shape, the `?` covers the key disappearing entirely.
-    let title: RenderedText?
-    let description: RenderedText?
-    let lengthSeconds: String
-    let externalChannelId: String
+    // Read by extractVideoInfo, so they stay required. These reach callers, and a change to one of
+    // them should stop the pipeline rather than quietly blank a field on every video.
     let category: String
     let publishDate: String
     let uploadDate: String
-    let ownerChannelName: String
-    let ownerProfileUrl: String
+    // Read too, and optional because a video that is not a broadcast simply has no such details.
     let liveBroadcastDetails: LiveBroadcastDetails?
+
+    // Nothing reads the rest. They stay modelled as a record of what the payload carries, but every
+    // one is optional, because a required field nothing reads is pure liability — this struct has
+    // already proved that once, when title and description failed every video the day YouTube
+    // switched them from runs to simpleText. The two defences are different: RenderedText absorbs a
+    // value arriving in an unfamiliar shape, the `?` absorbs the key going away. With both in place
+    // nothing below can fail a decode, which is the whole point of listing them here.
+    //
+    // Note lengthSeconds is the microformat copy. The duration callers receive is parsed from
+    // videoDetails.lengthSeconds, which is required, so this one genuinely is unread.
+    let title: RenderedText?
+    let description: RenderedText?
+    let lengthSeconds: String?
+    let externalChannelId: String?
+    let ownerChannelName: String?
+    let ownerProfileUrl: String?
 }
 
 /// Text that YouTube renders either as `{"runs":[{"text":"..."}]}` or `{"simpleText":"..."}`.

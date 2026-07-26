@@ -7,21 +7,10 @@ import XCTest
 /// helper itself is covered in `JSONBoundaryTests`.
 final class TrailingScriptTests: XCTestCase {
 
-    /// Captured from a real fetch with a Chrome user agent — the page that produced
-    /// `videoInfoParseError` for every video in the backfill. Reduced to the members the parser
-    /// reads, because the rest carried signed URLs holding the fetching machine's IP.
-    static func chromeUserAgentPageHTML() throws -> String {
-        let url = try XCTUnwrap(Bundle.module.url(forResource: "chrome-ua-watch-page",
-                                                  withExtension: "html",
-                                                  subdirectory: "Fixtures"),
-                                "Missing chrome-ua-watch-page.html fixture")
-        return try String(contentsOf: url, encoding: .utf8)
-    }
-
     // MARK: - The real page, both readers
 
     func testRealChromeUserAgentPageParsesVideoInfo() async throws {
-        let info = try await YouTubeTranscriptKit.extractVideoInfo(from: Self.chromeUserAgentPageHTML(),
+        let info = try await YouTubeTranscriptKit.extractVideoInfo(from: WatchPage.chromeUserAgentHTML(),
                                                                    includeTranscript: false)
         XCTAssertEqual(info.videoId, "jUa2x_xpFuM")
         XCTAssertEqual(info.title, "I have a weird conspiracy theory about this bridge")
@@ -38,7 +27,7 @@ final class TrailingScriptTests: XCTestCase {
     /// without authentication — and asserting on transcript text would tie this regression to a
     /// network behaviour that has nothing to do with the boundary bug.
     func testRealChromeUserAgentPageParsesCaptionTracks() throws {
-        let tracks = try YouTubeTranscriptKit.extractCaptionTracks(from: Self.chromeUserAgentPageHTML())
+        let tracks = try YouTubeTranscriptKit.extractCaptionTracks(from: WatchPage.chromeUserAgentHTML())
 
         XCTAssertEqual(tracks.count, 2, "Caption tracks must survive the trailing statements")
         // Manually written English first, then the auto-generated track.
@@ -54,7 +43,7 @@ final class TrailingScriptTests: XCTestCase {
     /// agent receives, which parsed before this fix and has to keep parsing after it. Deriving it
     /// from the same fixture keeps the pair honest: the only difference is the 169-byte tail.
     func testRealPageWithoutTrailingStatementsStillParses() async throws {
-        let clean = try Self.chromeUserAgentPageHTML()
+        let clean = try WatchPage.chromeUserAgentHTML()
             .replacingOccurrences(of: WatchPage.trailingScript, with: "")
         XCTAssertFalse(clean.contains("var meta"), "Tail was not removed, so this proves nothing")
 
@@ -109,16 +98,19 @@ final class TrailingScriptTests: XCTestCase {
         await assertVideoInfoParseError(for: WatchPage.page(json: json))
     }
 
+    /// The escaped form of the exact sequence above, semicolon included — anything without the
+    /// leading `;` would parse whether or not slashes were escaped, and so would prove nothing.
+    /// This is what YouTube actually emits, and it has to keep working.
     func testEscapedTerminatorInsideJSONParsesNormally() async throws {
         let json = WatchPage.playerResponse(microformat: {
             var members = WatchPage.microformatMembers
-            members["category"] = #""Education<\/script>""#
+            members["category"] = #""Education;<\/script>tail""#
             return members
         }())
 
         let info = try await YouTubeTranscriptKit.extractVideoInfo(
             from: WatchPage.page(json: json, trailing: WatchPage.trailingScript), includeTranscript: false)
-        XCTAssertEqual(info.category, "Education</script>")
+        XCTAssertEqual(info.category, "Education;</script>tail")
     }
 
     /// The loop must keep walking later matches: the first block on a page is not always the one that
