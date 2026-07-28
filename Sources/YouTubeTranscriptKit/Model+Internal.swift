@@ -156,9 +156,13 @@ struct PlayabilityResponse: Decodable {
 /// nothing to keep: a members-only video is `UNPLAYABLE` and still carries complete metadata, and
 /// checking this first would throw that away.
 struct PlayabilityStatus: Decodable {
-    /// `OK`, or a reason it is not — `ERROR` for a deleted video, `UNPLAYABLE` for members-only,
-    /// `LOGIN_REQUIRED` for private. Required, because a status this cannot read says nothing a
-    /// caller could act on, and a payload without one is better reported as the parse error it was.
+    /// `OK`, or a reason it is not — `ERROR` for a deleted video and `UNPLAYABLE` for members-only
+    /// are the two captured in fixtures. Carried verbatim, never mapped, because what a status means
+    /// is not always one thing: see `TranscriptError.videoUnavailable` for `LOGIN_REQUIRED`, which
+    /// covers both a private video and a soft ban and so cannot be labelled here.
+    ///
+    /// Required, because a status this cannot read says nothing a caller could act on, and a payload
+    /// without one is better reported as the parse error it was.
     let status: String
 
     /// The human-readable explanation, which some statuses omit.
