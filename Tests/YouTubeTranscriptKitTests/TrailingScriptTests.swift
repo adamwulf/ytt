@@ -68,7 +68,9 @@ final class TrailingScriptTests: XCTestCase {
         await assertVideoInfoParseError(for: WatchPage.page(json: #"{"videoDetails":{"videoId":"abc","#))
     }
 
-    /// A page with no marker at all is a missing, private or deleted video, not a schema change.
+    /// A page with no marker at all carries no player response to read, and nothing to ask why.
+    /// Not a schema change, and not `videoUnavailable` either: a deleted video does have the marker,
+    /// and says so in its `playabilityStatus` — `PlayabilityTests` covers that.
     func testPageWithoutMarkerStillReportsNoVideoInfo() async {
         do {
             _ = try await YouTubeTranscriptKit.extractVideoInfo(from: "<html></html>",

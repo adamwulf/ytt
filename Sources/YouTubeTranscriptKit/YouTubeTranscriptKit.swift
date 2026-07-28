@@ -15,6 +15,14 @@ public enum YouTubeTranscriptKit {
         case invalidXMLFormat
         case noVideoInfo
         case videoInfoParseError(Error)
+        /// The page loaded and said the video cannot be played: deleted, private, members-only.
+        ///
+        /// Permanent, and distinct from `videoInfoParseError` on purpose — that one means YouTube
+        /// changed their schema, and reporting it for a deleted video sends whoever reads it looking
+        /// for a bug in this parser. `status` is YouTube's own code (`ERROR`, `UNPLAYABLE`,
+        /// `LOGIN_REQUIRED`, ...) so a caller can classify without matching English prose; `reason`
+        /// carries that prose for a human, and is absent for the statuses that ship without one.
+        case videoUnavailable(status: String, reason: String?)
         case rateLimited(statusCode: Int, url: URL?)
         case httpError(statusCode: Int, url: URL?)
         case activityParseError(block: String, reason: String)
@@ -56,6 +64,8 @@ public enum YouTubeTranscriptKit {
     /// success. Permanent failures are deliberately excluded: a caption track that is gone for good
     /// answers 404 or 403 every time, and throwing for it would strand any caller that only marks a
     /// video done on success, leaving it to retry that video every run and never drain its queue.
+    /// `videoUnavailable` is permanent for the same reason and by the same rule — a deleted video
+    /// will still be deleted next run, and a caller that retries it is the queue that never drains.
     static func isTransientFetchFailure(_ error: Error) -> Bool {
         guard let error = error as? TranscriptError else { return false }
 
@@ -191,7 +201,7 @@ public enum YouTubeTranscriptKit {
                 let uploadedAt = dateFormatter.date(from: microformat.uploadDate)
 
                 // Convert string values to appropriate types
-                let viewCount = Int(details.viewCount)
+                let viewCount = details.viewCount.flatMap { Int($0) }
                 let lengthSeconds = Int(details.lengthSeconds)
 
                 // Convert thumbnails
@@ -252,13 +262,39 @@ public enum YouTubeTranscriptKit {
             }
         }
 
-        // The marker was present but nothing decoded, which points at a YouTube schema change
-        // rather than a video that is missing, private, or deleted.
+        // Nothing decoded. Before calling that a schema change, ask the payload why: a video that is
+        // deleted, private or otherwise blocked says so in playabilityStatus, and on a deleted page
+        // that is the only key the parser can act on at all.
+        //
+        // Deliberately after the loop, not before it. A members-only video reports a non-OK status
+        // and still carries complete metadata, which decodes and is worth keeping; only a payload
+        // that yields nothing usable is reported unavailable.
+        if let status = playabilityStatus(in: blobs), status.status != "OK" {
+            throw TranscriptError.videoUnavailable(status: status.status, reason: status.reason)
+        }
+
+        // The marker was present, nothing decoded, and the payload does not claim the video is gone,
+        // which points at a YouTube schema change.
         if let lastDecodeError {
             throw TranscriptError.videoInfoParseError(lastDecodeError)
         }
 
         throw TranscriptError.noVideoInfo
+    }
+
+    /// The playability status of the first blob that carries a readable one.
+    ///
+    /// Only ever consulted once `VideoResponse` has failed against every blob, so a blob that does
+    /// not carry the key is simply skipped: the caller already has a decode error to fall back on,
+    /// and one that names the field it wanted says more than a failure to find this one.
+    static func playabilityStatus(in blobs: [Data]) -> PlayabilityStatus? {
+        for jsonData in blobs {
+            if let response = try? JSONDecoder().decode(PlayabilityResponse.self, from: jsonData) {
+                return response.playabilityStatus
+            }
+        }
+
+        return nil
     }
 
     static func extractCaptionTracks(from htmlString: String) throws -> [CaptionTrack] {
