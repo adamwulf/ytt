@@ -56,6 +56,32 @@ final class PlayabilityTests: XCTestCase {
         XCTAssertNil(info.viewCount, "YouTube publishes no view count for a members-only video")
     }
 
+    /// Every non-OK status, not just the deleted video's `ERROR`. The condition is `!= "OK"`, and
+    /// nothing pinned that generality: narrowing it to `== "ERROR"` passed the whole suite while
+    /// sending private and blocked videos back to `videoInfoParseError` — the bug this exists to fix.
+    ///
+    /// `LOGIN_REQUIRED` is listed because the code does report it, not because that is known to be
+    /// the right answer for every page carrying it — see the note on the `videoUnavailable` case.
+    func testEveryNonOKStatusReportsVideoUnavailable() async {
+        for expected in ["ERROR", "UNPLAYABLE", "LOGIN_REQUIRED", "AGE_VERIFICATION_REQUIRED"] {
+            let page = WatchPage.page(json: WatchPage.playerResponse(
+                videoDetails: nil, microformat: nil,
+                playabilityStatus: WatchPage.playabilityStatus(expected)))
+
+            do {
+                _ = try await YouTubeTranscriptKit.extractVideoInfo(from: page, includeTranscript: false)
+                XCTFail("Expected videoUnavailable for \(expected)")
+            } catch let error as YouTubeTranscriptKit.TranscriptError {
+                guard case .videoUnavailable(let status, _) = error else {
+                    return XCTFail("Expected .videoUnavailable for \(expected), got \(error)")
+                }
+                XCTAssertEqual(status, expected)
+            } catch {
+                XCTFail("Expected TranscriptError for \(expected), got \(error)")
+            }
+        }
+    }
+
     // MARK: - The check has to come after the decode, not before it
 
     /// The ordering this whole change turns on. A members-only video reports a non-OK status *and*

@@ -85,9 +85,14 @@ final class MicroformatTextTests: XCTestCase {
         XCTAssertEqual(info.category, "Education")
     }
 
-    /// The leniency is scoped to fields nothing reads. A field the parser depends on must still fail
-    /// loudly, or a real schema change reaches callers as a plausible-looking blank.
-    func testFieldsThatAreActuallyReadStayStrict() async {
+    /// The leniency is scoped to fields nothing reads. These three the parser depends on must still
+    /// fail loudly, or a real schema change reaches callers as a plausible-looking blank.
+    ///
+    /// Scoped to the microformat on purpose. "Read implies required" is not the rule across the whole
+    /// model — `liveBroadcastDetails` and `VideoDetails.viewCount` are both read and both optional,
+    /// because their absence is meaningful rather than suspicious. `Model+Internal.swift` states the
+    /// rule these three are an instance of.
+    func testReadMicroformatFieldsStayStrict() async {
         for required in ["category", "publishDate", "uploadDate"] {
             var members = WatchPage.microformatMembers
             members.removeValue(forKey: required)

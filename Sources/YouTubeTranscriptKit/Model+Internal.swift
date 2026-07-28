@@ -23,8 +23,22 @@ struct PlayerMicroformat: Decodable {
     // them should stop the pipeline rather than quietly blank a field on every video.
     //
     // Being read is what earns a field that treatment, but it is not sufficient on its own — see
-    // VideoDetails.viewCount, which is read and still optional. The real test is whether absence
-    // would mean the parser has stopped understanding the payload. For these three it would.
+    // liveBroadcastDetails just below and VideoDetails.viewCount, both read and both optional. The
+    // real test is whether absence would mean the parser has stopped understanding the payload. For
+    // these three it would.
+    //
+    // The rule governs what is read. It does not claim the rest of this file already obeys its
+    // converse: VideoDetails.isLiveContent and LiveBroadcastDetails.startTimestamp are both required
+    // and both unread, which is the liability the paragraph further down describes, and neither has
+    // been audited against a payload that omits it. Relaxing them on that argument alone would be
+    // trading a tripwire for a guess, so they stay as they are, named here rather than left for
+    // someone to rediscover.
+    //
+    // VideoResponse.videoDetails and .microformat are a different case again. Both are required, and
+    // both are legitimately absent from a deleted video's payload, which the parser understands
+    // perfectly well. Their required-ness is no longer the tripwire it looks like — what gives that
+    // absence its meaning is the playabilityStatus check in extractVideoInfo, downstream of the
+    // decode that fails here.
     let category: String
     let publishDate: String
     let uploadDate: String
@@ -52,9 +66,13 @@ struct PlayerMicroformat: Decodable {
 ///
 /// Which one appears varies by field and changes over time, so both are accepted, and any other
 /// shape decodes to a nil `text` rather than throwing. That leniency is deliberate but narrow: it
-/// belongs to fields nothing depends on. Fields the parser reads stay strict — bar the one case
-/// YouTube is known to omit, `VideoDetails.viewCount` — so a schema change that matters still
-/// surfaces as `videoInfoParseError` instead of quietly vanishing.
+/// belongs to fields whose text nothing depends on — every field below that uses it, plus
+/// `PlayabilityStatus.reason`, which does reach callers but only as prose for a human to read.
+///
+/// Fields the parser reads stay strict, bar the ones whose absence is itself meaningful rather than
+/// suspicious: `liveBroadcastDetails`, absent because the video is not a broadcast, and
+/// `VideoDetails.viewCount`, absent because the video is members-only. So a schema change that
+/// matters still surfaces as `videoInfoParseError` instead of quietly vanishing.
 struct RenderedText: Decodable {
     let text: String?
 

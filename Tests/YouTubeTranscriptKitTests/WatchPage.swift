@@ -100,12 +100,13 @@ enum WatchPage {
 
     /// A captured watch page from `Tests/YouTubeTranscriptKitTests/Fixtures`.
     ///
-    /// Every fixture is a real fetch reduced the same way: the top-level player-response keys the
-    /// parser reads are kept verbatim, and `responseContext`, `trackingParams`, `frameworkUpdates`,
-    /// `messages` and `adBreakHeartbeatParams` are dropped — nothing decodes them, the first two
-    /// identify the session that did the fetching, and the pages run 750KB to 1.1MB with them in.
-    /// The appended `var meta` statement is always kept, because the real pages carry it and the
-    /// slice has to survive it.
+    /// Every fixture is a real fetch, reduced because the pages run 750KB to 1.1MB whole and because
+    /// `responseContext` and `trackingParams` identify the session that fetched them. What each one
+    /// kept is recorded on its own accessor — they were reduced at different times against different
+    /// ideas of which keys the parser reads, and `chrome-ua-watch-page.html` predates
+    /// `playabilityStatus` being read at all, so it carries none. Harmless, because that page
+    /// decodes and the status is only consulted when nothing does; worth knowing before reaching for
+    /// it to test anything about playability.
     private static func fixtureHTML(_ name: String) throws -> String {
         let url = try XCTUnwrap(Bundle.module.url(forResource: name,
                                                   withExtension: "html",
@@ -125,6 +126,10 @@ enum WatchPage {
     /// `videoInfoParseError(keyNotFound "videoDetails")`. Its player response carries a
     /// `playabilityStatus` and nothing else the parser looks at — no `videoDetails`, no
     /// `microformat`, no `captions`.
+    ///
+    /// Kept: `playabilityStatus`, verbatim, plus the appended `var meta` statement the real page
+    /// carries and the slice has to survive. Dropped: `responseContext`, `trackingParams`,
+    /// `frameworkUpdates`.
     static func deletedVideoHTML() throws -> String {
         return try fixtureHTML("deleted-video-watch-page")
     }
@@ -132,6 +137,10 @@ enum WatchPage {
     /// The real watch page of a members-only video, `smpLJS_QZg8`, which reported
     /// `videoInfoParseError(keyNotFound "viewCount", path: videoDetails)`. A non-OK status alongside
     /// otherwise complete metadata, missing only the view count YouTube does not publish for one.
+    ///
+    /// Kept: `playabilityStatus`, `videoDetails` and `microformat`, verbatim, plus the appended
+    /// `var meta` statement. Dropped: `responseContext`, `trackingParams`, `frameworkUpdates`,
+    /// `messages`, `adBreakHeartbeatParams`.
     static func membersOnlyHTML() throws -> String {
         return try fixtureHTML("members-only-watch-page")
     }
