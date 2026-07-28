@@ -66,8 +66,9 @@ struct PlayerMicroformat: Decodable {
 ///
 /// Which one appears varies by field and changes over time, so both are accepted, and any other
 /// shape decodes to a nil `text` rather than throwing. That leniency is deliberate but narrow: it
-/// belongs to fields whose text nothing depends on — every field below that uses it, plus
-/// `PlayabilityStatus.reason`, which does reach callers but only as prose for a human to read.
+/// belongs to fields whose text nothing depends on — the microformat `title` and `description`
+/// above, plus `PlayabilityStatus.reason` below, which does reach callers but only as prose for a
+/// human to read.
 ///
 /// Fields the parser reads stay strict, bar the ones whose absence is itself meaningful rather than
 /// suspicious: `liveBroadcastDetails`, absent because the video is not a broadcast, and

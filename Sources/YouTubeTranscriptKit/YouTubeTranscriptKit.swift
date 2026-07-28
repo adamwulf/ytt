@@ -35,7 +35,14 @@ public enum YouTubeTranscriptKit {
         /// No fixture of that page exists yet, so the reason text that would distinguish it is
         /// unverified and nothing here matches on it — guessing at prose we have never seen would be
         /// the same mistake in the other direction. Until one is captured, treat `LOGIN_REQUIRED` as
-        /// needing its reason inspected, and the rest of the statuses as permanent.
+        /// needing its reason inspected.
+        ///
+        /// Do not read that as "every other status is permanent". `LIVE_STREAM_OFFLINE` is a stream
+        /// that has not started, which is as transient as it gets, and it does not arrive here today
+        /// only because such a page carries `videoDetails` and decodes — the status is never consulted
+        /// for it. What reaches this error is narrow by construction: a payload that yielded nothing
+        /// usable at all. A caller classifying on `status` should still default to retrying anything
+        /// it does not recognise rather than filing it permanently.
         case videoUnavailable(status: String, reason: String?)
         case rateLimited(statusCode: Int, url: URL?)
         case httpError(statusCode: Int, url: URL?)
