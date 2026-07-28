@@ -15,6 +15,35 @@ public enum YouTubeTranscriptKit {
         case invalidXMLFormat
         case noVideoInfo
         case videoInfoParseError(Error)
+        /// The page loaded and said the video cannot be played.
+        ///
+        /// Distinct from `videoInfoParseError` on purpose — that one means YouTube changed their
+        /// schema, and reporting it for a deleted video sends whoever reads it looking for a bug in
+        /// this parser. `status` is YouTube's own code, verbatim and unmapped, so a caller can
+        /// classify on it rather than on English prose; `reason` carries the prose for a human, and
+        /// is absent for the statuses that ship without one.
+        ///
+        /// Whether it is permanent depends on the status, and this case deliberately does not decide:
+        /// `ERROR` (deleted) and `UNPLAYABLE` (members-only) are the two captured in fixtures and
+        /// both are permanent. `LOGIN_REQUIRED` is not safely either — YouTube uses it for a private
+        /// video, which is permanent, and also for its "Sign in to confirm you're not a bot" wall,
+        /// which is a soft ban and the most transient thing there is. That wall arrives as a 200 on a
+        /// page `isCaptchaWall` cannot see, since it only matches the `/sorry` redirect, so nothing
+        /// upstream catches it first. A caller that files every `videoUnavailable` permanently would
+        /// write off every video fetched during a ban.
+        ///
+        /// No fixture of that page exists yet, so the reason text that would distinguish it is
+        /// unverified and nothing here matches on it — guessing at prose we have never seen would be
+        /// the same mistake in the other direction. Until one is captured, treat `LOGIN_REQUIRED` as
+        /// needing its reason inspected.
+        ///
+        /// Do not read that as "every other status is permanent". `LIVE_STREAM_OFFLINE` is a stream
+        /// that has not started, which is as transient as it gets, and it does not arrive here today
+        /// only because such a page carries `videoDetails` and decodes — the status is never consulted
+        /// for it. What reaches this error is narrow by construction: a payload that yielded nothing
+        /// usable at all. A caller classifying on `status` should still default to retrying anything
+        /// it does not recognise rather than filing it permanently.
+        case videoUnavailable(status: String, reason: String?)
         case rateLimited(statusCode: Int, url: URL?)
         case httpError(statusCode: Int, url: URL?)
         case activityParseError(block: String, reason: String)
@@ -56,6 +85,11 @@ public enum YouTubeTranscriptKit {
     /// success. Permanent failures are deliberately excluded: a caption track that is gone for good
     /// answers 404 or 403 every time, and throwing for it would strand any caller that only marks a
     /// video done on success, leaving it to retry that video every run and never drain its queue.
+    /// `videoUnavailable` is excluded too: a deleted video will still be deleted next run, and a
+    /// caller that retries it is the queue that never drains. That holds for the statuses whose
+    /// permanence is established — see the case's own doc for `LOGIN_REQUIRED`, which is not one of
+    /// them. This function is internal and only guards the caption fetch, where `videoUnavailable`
+    /// cannot arise, so the ambiguity is the caller's to resolve and not decided here.
     static func isTransientFetchFailure(_ error: Error) -> Bool {
         guard let error = error as? TranscriptError else { return false }
 
@@ -191,7 +225,7 @@ public enum YouTubeTranscriptKit {
                 let uploadedAt = dateFormatter.date(from: microformat.uploadDate)
 
                 // Convert string values to appropriate types
-                let viewCount = Int(details.viewCount)
+                let viewCount = details.viewCount.flatMap { Int($0) }
                 let lengthSeconds = Int(details.lengthSeconds)
 
                 // Convert thumbnails
@@ -252,13 +286,39 @@ public enum YouTubeTranscriptKit {
             }
         }
 
-        // The marker was present but nothing decoded, which points at a YouTube schema change
-        // rather than a video that is missing, private, or deleted.
+        // Nothing decoded. Before calling that a schema change, ask the payload why: a video that is
+        // deleted, private or otherwise blocked says so in playabilityStatus, and on a deleted page
+        // that is the only key the parser can act on at all.
+        //
+        // Deliberately after the loop, not before it. A members-only video reports a non-OK status
+        // and still carries complete metadata, which decodes and is worth keeping; only a payload
+        // that yields nothing usable is reported unavailable.
+        if let status = playabilityStatus(in: blobs), status.status != "OK" {
+            throw TranscriptError.videoUnavailable(status: status.status, reason: status.reason)
+        }
+
+        // The marker was present, nothing decoded, and the payload does not claim the video is gone,
+        // which points at a YouTube schema change.
         if let lastDecodeError {
             throw TranscriptError.videoInfoParseError(lastDecodeError)
         }
 
         throw TranscriptError.noVideoInfo
+    }
+
+    /// The playability status of the first blob that carries a readable one.
+    ///
+    /// Only ever consulted once `VideoResponse` has failed against every blob, so a blob that does
+    /// not carry the key is simply skipped: the caller already has a decode error to fall back on,
+    /// and one that names the field it wanted says more than a failure to find this one.
+    static func playabilityStatus(in blobs: [Data]) -> PlayabilityStatus? {
+        for jsonData in blobs {
+            if let response = try? JSONDecoder().decode(PlayabilityResponse.self, from: jsonData) {
+                return response.playabilityStatus
+            }
+        }
+
+        return nil
     }
 
     static func extractCaptionTracks(from htmlString: String) throws -> [CaptionTrack] {
@@ -278,6 +338,12 @@ public enum YouTubeTranscriptKit {
                 // so a decode failure cannot be told apart from "no captions" and the loop moves on.
                 // That tolerance is why a malformed blob is invisible here: it surfaces as
                 // noCaptionData, which callers treat as a no-op rather than an error.
+                //
+                // It is also why getTranscript() on a deleted video reports noCaptionData rather than
+                // videoUnavailable: this path has no error to report and no equivalent playability
+                // check. getVideoInfo() is the entry point that tells them apart. Adding the check
+                // here would mean deciding that an unplayable video must fail the caption fetch,
+                // which is the opposite of what the tolerance above exists for.
             }
         }
 
