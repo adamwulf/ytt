@@ -327,6 +327,50 @@ final class TranscriptTests: XCTestCase {
         XCTAssertFalse(YouTubeTranscriptKit.isCaptchaWall(nil))
     }
 
+    // MARK: - Caption URL format Unit Tests
+
+    func testCaptionURLReplacesSrv3WithSrv1() throws {
+        // InnerTube hands back a baseUrl ending in fmt=srv3, whose <p><s> markup the parser cannot
+        // read. It must be pinned to srv1, the classic <text start dur> shape.
+        let base = "https://www.youtube.com/api/timedtext?v=abc123&sparams=ip,ipbits,expire"
+            + "&signature=ABC123.DEF456&key=yt8&lang=en&fmt=srv3"
+        let url = try XCTUnwrap(YouTubeTranscriptKit.captionURL(fromBaseURL: base))
+        let query = try XCTUnwrap(url.query)
+
+        XCTAssertTrue(query.contains("fmt=srv1"), "Expected fmt=srv1 in \(query)")
+        XCTAssertFalse(query.contains("fmt=srv3"), "srv3 must be gone from \(query)")
+        // The signature and sparams must survive untouched, or the request 403s.
+        XCTAssertTrue(query.contains("signature=ABC123.DEF456"), "Signature altered: \(query)")
+        XCTAssertTrue(query.contains("sparams=ip,ipbits,expire"), "sparams altered: \(query)")
+    }
+
+    func testCaptionURLAppendsSrv1WhenFormatAbsent() throws {
+        let base = "https://www.youtube.com/api/timedtext?v=abc123&lang=en"
+        let url = try XCTUnwrap(YouTubeTranscriptKit.captionURL(fromBaseURL: base))
+        let query = try XCTUnwrap(url.query)
+
+        XCTAssertTrue(query.contains("fmt=srv1"), "Expected fmt=srv1 in \(query)")
+        XCTAssertTrue(query.contains("v=abc123"))
+        XCTAssertTrue(query.contains("lang=en"))
+    }
+
+    // MARK: - Video ID extraction Unit Tests
+
+    func testVideoIDFromWatchURL() throws {
+        let url = try XCTUnwrap(URL(string: "https://www.youtube.com/watch?v=abc123&t=42s"))
+        XCTAssertEqual(YouTubeTranscriptKit.videoID(from: url), "abc123")
+    }
+
+    func testVideoIDFromShortURL() throws {
+        let url = try XCTUnwrap(URL(string: "https://youtu.be/abc123?si=xyz"))
+        XCTAssertEqual(YouTubeTranscriptKit.videoID(from: url), "abc123")
+    }
+
+    func testVideoIDMissingReturnsNil() throws {
+        let url = try XCTUnwrap(URL(string: "https://www.youtube.com/results?search_query=cats"))
+        XCTAssertNil(YouTubeTranscriptKit.videoID(from: url))
+    }
+
     // MARK: - Integration Tests
     // These tests hit the real YouTube API and are skipped by default.
     // Run with: YOUTUBE_INTEGRATION_TESTS=1 swift test --filter TranscriptTests/testIntegration

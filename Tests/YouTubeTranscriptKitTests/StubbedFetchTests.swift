@@ -56,10 +56,24 @@ enum WatchPageFixture {
 
     static let videoURL = URL(string: "https://www.youtube.com/watch?v=abc123")!
     static let captionURL = URL(string: "https://www.youtube.com/api/timedtext?v=abc123")!
+    static let playerURL = URL(string: "https://www.youtube.com/youtubei/v1/player")!
     static let captchaURL = URL(string: "https://www.google.com/sorry/index?continue=https://www.youtube.com/watch%3Fv%3Dabc123")!
 
     static func isCaptionRequest(_ request: URLRequest) -> Bool {
         return request.url?.path.contains("timedtext") == true
+    }
+
+    /// The InnerTube player POST that now supplies caption tracks, since the watch page's own caption
+    /// baseUrls answer 200 with an empty body.
+    static func isPlayerRequest(_ request: URLRequest) -> Bool {
+        return request.url?.path.contains("/youtubei/v1/player") == true
+    }
+
+    /// An InnerTube player response advertising one caption track whose baseUrl is the fixture's
+    /// caption URL, so the caption fetch that follows lands back on the stub.
+    static func playerResponseJSON() -> String {
+        return "{\"captions\":{\"playerCaptionsTracklistRenderer\":{\"captionTracks\":["
+            + "{\"baseUrl\":\"\(captionURL.absoluteString)\",\"vssId\":\".en\",\"languageCode\":\"en\"}]}}}"
     }
 
     /// A watch page that parses cleanly and advertises one caption track, so the caption fetch runs.
@@ -114,6 +128,14 @@ final class StubbedFetchTests: XCTestCase {
         return WatchPageFixture.isCaptionRequest(request)
     }
 
+    private static func isPlayerRequest(_ request: URLRequest) -> Bool {
+        return WatchPageFixture.isPlayerRequest(request)
+    }
+
+    private static func playerResponseJSON() -> String {
+        return WatchPageFixture.playerResponseJSON()
+    }
+
     private func assertRateLimited(_ error: Error, file: StaticString = #filePath, line: UInt = #line) {
         guard let error = error as? YouTubeTranscriptKit.TranscriptError else {
             return XCTFail("Expected TranscriptError, got \(error)", file: file, line: line)
@@ -131,6 +153,9 @@ final class StubbedFetchTests: XCTestCase {
         // fetch lands on the CAPTCHA wall. Returning a VideoInfo here would look like a success and
         // callers would persist a video as done with a transcript it actually has.
         StubURLProtocol.handler = { request in
+            if Self.isPlayerRequest(request) {
+                return StubURLProtocol.Stub(body: Self.playerResponseJSON())
+            }
             if Self.isCaptionRequest(request) {
                 return StubURLProtocol.Stub(statusCode: 200, url: Self.captchaURL, body: "<html>302 Moved</html>")
             }
@@ -174,6 +199,9 @@ final class StubbedFetchTests: XCTestCase {
     func testCaptionFetchServerErrorSurfacesHTTPError() async {
         // 5xx is transient, so it must fail the call rather than quietly drop the transcript.
         StubURLProtocol.handler = { request in
+            if Self.isPlayerRequest(request) {
+                return StubURLProtocol.Stub(body: Self.playerResponseJSON())
+            }
             if Self.isCaptionRequest(request) {
                 return StubURLProtocol.Stub(statusCode: 503)
             }
@@ -199,6 +227,9 @@ final class StubbedFetchTests: XCTestCase {
         // A caption track that is gone stays gone. Throwing here would strand the video: callers
         // that only mark a video done on success would retry it every run and never drain.
         StubURLProtocol.handler = { request in
+            if Self.isPlayerRequest(request) {
+                return StubURLProtocol.Stub(body: Self.playerResponseJSON())
+            }
             if Self.isCaptionRequest(request) {
                 return StubURLProtocol.Stub(statusCode: 404)
             }
@@ -212,6 +243,9 @@ final class StubbedFetchTests: XCTestCase {
 
     func testCaptionFetchForbiddenStillReturnsVideoInfo() async throws {
         StubURLProtocol.handler = { request in
+            if Self.isPlayerRequest(request) {
+                return StubURLProtocol.Stub(body: Self.playerResponseJSON())
+            }
             if Self.isCaptionRequest(request) {
                 return StubURLProtocol.Stub(statusCode: 403)
             }
@@ -231,6 +265,9 @@ final class StubbedFetchTests: XCTestCase {
             + "<text start=\"1.5\" dur=\"2.0\">General Kenobi</text></transcript>"
 
         StubURLProtocol.handler = { request in
+            if Self.isPlayerRequest(request) {
+                return StubURLProtocol.Stub(body: Self.playerResponseJSON())
+            }
             if Self.isCaptionRequest(request) {
                 return StubURLProtocol.Stub(body: xml)
             }
@@ -241,6 +278,50 @@ final class StubbedFetchTests: XCTestCase {
         XCTAssertEqual(info.videoId, "abc123")
         XCTAssertEqual(info.transcript?.count, 2)
         XCTAssertEqual(info.transcript?.first?.text, "Hello there")
+    }
+
+    func testGetTranscriptFetchesTracksViaInnerTube() async throws {
+        // getTranscript no longer reads the watch page: it POSTs to InnerTube for the caption tracks,
+        // whose baseUrls still work, then fetches the caption XML.
+        let xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?><transcript>"
+            + "<text start=\"0.0\" dur=\"1.5\">Hello there</text>"
+            + "<text start=\"1.5\" dur=\"2.0\">General Kenobi</text></transcript>"
+
+        StubURLProtocol.handler = { request in
+            if Self.isPlayerRequest(request) {
+                return StubURLProtocol.Stub(body: Self.playerResponseJSON())
+            }
+            if Self.isCaptionRequest(request) {
+                return StubURLProtocol.Stub(body: xml)
+            }
+            // A watch-page fetch would be a regression: getTranscript must not need it any more.
+            return StubURLProtocol.Stub(statusCode: 500)
+        }
+
+        let transcript = try await YouTubeTranscriptKit.getTranscript(url: Self.videoURL)
+        XCTAssertEqual(transcript.count, 2)
+        XCTAssertEqual(transcript.first?.text, "Hello there")
+    }
+
+    func testGetTranscriptWithNoCaptionTracksThrowsNoCaptionData() async {
+        // A video that truly has no captions: InnerTube answers 200 with no caption tracks.
+        StubURLProtocol.handler = { request in
+            if Self.isPlayerRequest(request) {
+                return StubURLProtocol.Stub(body: "{\"videoDetails\":{\"videoId\":\"abc123\"}}")
+            }
+            return StubURLProtocol.Stub(statusCode: 500)
+        }
+
+        do {
+            _ = try await YouTubeTranscriptKit.getTranscript(url: Self.videoURL)
+            XCTFail("Expected .noCaptionData")
+        } catch let error as YouTubeTranscriptKit.TranscriptError {
+            guard case .noCaptionData = error else {
+                return XCTFail("Expected .noCaptionData, got \(error)")
+            }
+        } catch {
+            XCTFail("Unexpected error type: \(error)")
+        }
     }
 
     func testVideoInfoWithoutTranscriptSkipsCaptionFetch() async throws {
