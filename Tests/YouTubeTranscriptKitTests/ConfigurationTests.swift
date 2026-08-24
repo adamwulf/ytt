@@ -16,6 +16,9 @@ final class ConfigurationTests: XCTestCase {
         Self.recordedRequests = []
         StubURLProtocol.handler = { request in
             ConfigurationTests.recordedRequests.append(request)
+            if WatchPageFixture.isPlayerRequest(request) {
+                return StubURLProtocol.Stub(body: WatchPageFixture.playerResponseJSON())
+            }
             if WatchPageFixture.isCaptionRequest(request) {
                 return StubURLProtocol.Stub(body: "<transcript></transcript>")
             }
@@ -61,16 +64,21 @@ final class ConfigurationTests: XCTestCase {
         XCTAssertEqual(header("Accept-Language", ofRequestAt: 0), "en-US,en;q=0.9")
     }
 
-    func testConfiguredHeadersAreSentOnTheCaptionRequestToo() async {
-        // The caption fetch is a separate call site from the watch page. Headers ride on the session
-        // rather than on individual requests precisely so no site can be forgotten.
+    func testConfiguredHeadersAreSentOnTheCaptionRequestToo() async throws {
+        // The transcript fetch spans two call sites beyond the watch page: the InnerTube player POST
+        // that now supplies the caption tracks, and the caption GET itself. Headers ride on the
+        // session rather than on individual requests precisely so no site can be forgotten, so every
+        // one of them must carry the configured identity.
         YouTubeTranscriptKit.configure(.init(additionalHeaders: ["User-Agent": Self.userAgent]))
 
         await fetch(includeTranscript: true)
 
-        XCTAssertEqual(Self.recordedRequests.count, 2, "Expected a watch page fetch and a caption fetch")
-        XCTAssertTrue(WatchPageFixture.isCaptionRequest(Self.recordedRequests[1]))
-        XCTAssertEqual(header("User-Agent", ofRequestAt: 1), Self.userAgent)
+        XCTAssertEqual(Self.recordedRequests.count, 3,
+                       "Expected a watch page fetch, an InnerTube player fetch and a caption fetch")
+        let playerRequest = try XCTUnwrap(Self.recordedRequests.first(where: WatchPageFixture.isPlayerRequest))
+        let captionRequest = try XCTUnwrap(Self.recordedRequests.first(where: WatchPageFixture.isCaptionRequest))
+        XCTAssertEqual(playerRequest.value(forHTTPHeaderField: "User-Agent"), Self.userAgent)
+        XCTAssertEqual(captionRequest.value(forHTTPHeaderField: "User-Agent"), Self.userAgent)
     }
 
     // MARK: - Ordering

@@ -146,15 +146,63 @@ public enum YouTubeTranscriptKit {
     // MARK: - Transcripts
 
     public static func getTranscript(videoID: String) async throws -> [TranscriptMoment] {
-        let url = try youtubeURL(fromID: videoID)
-        return try await getTranscript(url: url)
+        let tracks = try await fetchCaptionTracks(videoID: videoID)
+        return try await getTranscriptText(from: tracks)
     }
 
     public static func getTranscript(url: URL) async throws -> [TranscriptMoment] {
+        guard let videoID = videoID(from: url) else {
+            throw TranscriptError.invalidURL
+        }
+        return try await getTranscript(videoID: videoID)
+    }
+
+    // MARK: - Caption tracks (InnerTube)
+
+    /// The caption tracks for a video, fetched from the InnerTube player endpoint.
+    ///
+    /// The caption `baseUrl`s embedded in the public watch page's `ytInitialPlayerResponse` no longer
+    /// return anything: a request to one answers `200` with an empty body, which is why fetching a
+    /// transcript from the watch page now fails with `noTranscriptData` even though the page still
+    /// lists the tracks. Posting to `youtubei/v1/player` as the ANDROID client returns the same
+    /// caption schema (`captions.playerCaptionsTracklistRenderer.captionTracks`) with fresh `baseUrl`s
+    /// that do return content. What earns the working URLs is the `ANDROID` client in the body, not
+    /// the transport identity: no API key or cookie is needed, and the request succeeds whatever the
+    /// `User-Agent` is. So this sets only `Content-Type` and otherwise leaves the session's headers
+    /// alone — the consumer's configured identity, if any, still rides every request uniformly, which
+    /// is the invariant `ConfigurationTests` pins.
+    ///
+    /// Video metadata still comes from the watch page, because this ANDROID response carries no
+    /// `microformat` and so cannot supply the category and dates `getVideoInfo` returns.
+    static func fetchCaptionTracks(videoID: String) async throws -> [CaptionTrack] {
+        guard !videoID.isEmpty else {
+            throw TranscriptError.invalidVideoID
+        }
+        guard let url = URL(string: "https://www.youtube.com/youtubei/v1/player") else {
+            throw TranscriptError.invalidURL
+        }
+
+        let payload: [String: Any] = [
+            "videoId": videoID,
+            "context": [
+                "client": [
+                    "clientName": "ANDROID",
+                    "clientVersion": "20.10.38",
+                    "androidSdkVersion": 30,
+                    "hl": "en",
+                    "gl": "US"
+                ]
+            ]
+        ]
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
         let data: Data
         let response: URLResponse
         do {
-            let request = URLRequest(url: url)
             (data, response) = try await session.data(for: request)
         } catch {
             throw TranscriptError.networkError(error)
@@ -162,22 +210,36 @@ public enum YouTubeTranscriptKit {
 
         try validate(response)
 
-        guard let htmlString = String(data: data, encoding: .utf8) else {
-            throw TranscriptError.invalidHTMLFormat
+        return try extractCaptionTracks(from: [data])
+    }
+
+    /// The `v` video id carried by a YouTube watch URL, or the path id of a `youtu.be` short URL.
+    static func videoID(from url: URL) -> String? {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return nil
         }
 
-        let tracks = try extractCaptionTracks(from: htmlString)
-        let text = try await getTranscriptText(from: tracks)
-        return text
+        if let host = url.host?.lowercased(), host == "youtu.be" || host.hasSuffix(".youtu.be") {
+            let id = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            return id.isEmpty ? nil : id
+        }
+
+        if let value = components.queryItems?.first(where: { $0.name == "v" })?.value, !value.isEmpty {
+            return value
+        }
+
+        return nil
     }
 
     // MARK: - Private
 
     /// Every `ytInitialPlayerResponse` blob embedded in a watch page, in document order.
     ///
-    /// Shared so the video-info and caption paths always decode exactly the same bytes. They read
-    /// the same script block, and when only one of them compensated for a trailing statement the
-    /// other failed invisibly.
+    /// The video-info metadata decode and the HTML caption extraction both read these blobs, so they
+    /// always decode exactly the same bytes: when only one of them compensated for a trailing
+    /// statement the other failed invisibly. Production caption fetching no longer reads the watch
+    /// page at all — its tracks come from InnerTube, see `fetchCaptionTracks(videoID:)` — but
+    /// `extractCaptionTracks(from:String)` still parses these blobs and its unit tests still pin it.
     ///
     /// The slice runs to the first `;</script>`, which ends the statement but is not always the end
     /// of the JSON — YouTube appends further statements to the same block for some clients, leaving
@@ -246,7 +308,10 @@ public enum YouTubeTranscriptKit {
                 let transcript: [TranscriptMoment]?
                 do {
                     if includeTranscript {
-                        let captionTracks = try extractCaptionTracks(from: blobs)
+                        // Captions come from the InnerTube player endpoint, not from these blobs: the
+                        // caption baseUrls the watch page embeds now answer 200 with an empty body.
+                        // See fetchCaptionTracks(videoID:) for the why.
+                        let captionTracks = try await fetchCaptionTracks(videoID: details.videoId)
                         transcript = try await getTranscriptText(from: captionTracks)
                     } else {
                         transcript = nil
@@ -384,9 +449,31 @@ public enum YouTubeTranscriptKit {
         throw TranscriptError.noTranscriptData
     }
 
+    /// A caption `baseUrl` with its transcript format pinned to `srv1`.
+    ///
+    /// InnerTube hands back a `baseUrl` ending in `fmt=srv3`, the word-timed format whose `<p><s>`
+    /// markup `parseTranscriptXML` cannot read. `srv1` is the classic `<transcript><text start dur>`
+    /// shape the parser expects. `fmt` is not among the signed `sparams`, so replacing it leaves the
+    /// signature valid.
+    ///
+    /// The query is edited as raw text rather than through `URLComponents`, which would re-encode the
+    /// signature and `sparams` and could break the signature. Only the `fmt` pair is touched; every
+    /// other pair is preserved byte for byte.
+    static func captionURL(fromBaseURL urlString: String) -> URL? {
+        let parts = urlString.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        let base = String(parts[0])
+        let existingQuery = parts.count > 1 ? String(parts[1]) : ""
+
+        var pairs = existingQuery.split(separator: "&", omittingEmptySubsequences: true).map(String.init)
+        pairs.removeAll { $0 == "fmt" || $0.hasPrefix("fmt=") }
+        pairs.append("fmt=srv1")
+
+        return URL(string: base + "?" + pairs.joined(separator: "&"))
+    }
+
     private static func getTranscriptText(from track: CaptionTrack) async throws -> [TranscriptMoment] {
         let urlString = track.baseUrl.hasPrefix("http") ? track.baseUrl : "https://www.youtube.com\(track.baseUrl)"
-        guard let url = URL(string: urlString) else {
+        guard let url = captionURL(fromBaseURL: urlString) else {
             throw TranscriptError.invalidURL
         }
 
