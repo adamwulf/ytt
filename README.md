@@ -9,6 +9,28 @@ A Swift package providing both a command line tool and library for interacting w
 
 ### Installation
 
+#### Mint
+
+Install with [Mint](https://github.com/yonaskolb/Mint):
+
+```bash
+mint install adamwulf/ytt@main --force
+```
+
+This installs the current `main` tip. The `@main` ref is required because no
+version is tagged yet, and `--force` makes Mint rebuild from the latest tip
+instead of skipping when it already has a `main` build cached — so the same
+command works for a first install and for later updates. If you do not have
+Mint, install it with `brew install mint`.
+
+To run the tool once without a global install:
+
+```bash
+mint run adamwulf/ytt@main -- ytt <args>
+```
+
+#### Build from source
+
 ```bash
 swift build -c release
 cp .build/release/ytt /usr/local/bin/
